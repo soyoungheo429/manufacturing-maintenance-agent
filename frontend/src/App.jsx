@@ -9,7 +9,7 @@ import {
   formatTimestamp,
 } from "./constants.js";
 import { equipmentData, consolidatedOrderData } from "./data/mockData.js";
-import { getDashboardData } from "./api/index.js";
+import { getDashboardData, refreshData as requestRefresh, createOrder } from "./api/index.js";
 import LoginScreen from "./components/LoginScreen.jsx";
 import SummaryCards from "./components/SummaryCards.jsx";
 import FacilityHeatmap from "./components/FacilityHeatmap.jsx";
@@ -40,7 +40,7 @@ export default function App() {
   const lastAutoSlotRef = useRef(null);
 
   // VITE_API_GATEWAY_URL 설정 시 GET /dashboard 조회, 미설정/실패 시 목데이터 유지
-  const refreshData = useCallback(async () => {
+  const loadDashboard = useCallback(async () => {
     setRefreshing(true);
     try {
       const data = await getDashboardData();
@@ -67,12 +67,12 @@ export default function App() {
       const slot = Math.floor(now.getTime() / 60000); // 분 단위 슬롯 — 같은 분 중복 실행 방지
       if (lastAutoSlotRef.current === slot) return;
       lastAutoSlotRef.current = slot;
-      refreshData();
+      loadDashboard();
     };
     checkSchedule();
     const timer = setInterval(checkSchedule, 5000);
     return () => clearInterval(timer);
-  }, [refreshData]);
+  }, [loadDashboard]);
 
   // 수동 새로고침 쿨다운 (자동 스케줄에는 영향 없음)
   // 마감 시각(wall-clock) 기준으로 계산해 백그라운드 탭 타이머 스로틀링에도 정확
@@ -88,10 +88,20 @@ export default function App() {
     return () => clearInterval(timer);
   }, [cooldownUntil]);
 
-  const handleManualRefresh = () => {
+  // 수동 새로고침: POST /refresh(서버 쿨다운 + sensor_read 트리거) → GET /dashboard(갱신 조회)
+  const handleManualRefresh = async () => {
     if (cooldownRemaining > 0) return;
-    refreshData();
-    setCooldownUntil(Date.now() + MANUAL_REFRESH_COOLDOWN_SEC * 1000);
+    setCooldownUntil(Date.now() + MANUAL_REFRESH_COOLDOWN_SEC * 1000); // 연타 방지 선반영
+    try {
+      const r = await requestRefresh(user?.username ?? "default");
+      if (r?.cooldown) {
+        // 서버측 쿨다운이 남아있으면(429) 서버 기준 남은 시간으로 동기화
+        setCooldownUntil(Date.now() + (r.remaining ?? MANUAL_REFRESH_COOLDOWN_SEC) * 1000);
+      }
+    } catch (err) {
+      console.warn("POST /refresh 실패 — 대시보드 조회는 계속 진행:", err);
+    }
+    await loadDashboard();
   };
 
   const anomalyList = equipments.filter((e) => e.status !== "normal");
@@ -110,11 +120,23 @@ export default function App() {
     (id) => (order.decisions[id] ?? "pending") === "pending"
   ).length;
 
-  const handleOrderAction = (equipmentId, action) => {
+  // 발주 승인/거절: 화면 먼저 갱신(낙관적 업데이트) 후 POST /order로 서버에 반영
+  const handleOrderAction = async (equipmentId, action) => {
     setOrder((prev) => ({
       ...prev,
       decisions: { ...prev.decisions, [equipmentId]: action },
     }));
+    try {
+      // create_order Lambda 스키마 확정 시 payload 필드명만 맞추면 됨
+      await createOrder({
+        order_id: order.id,
+        facility_id: equipmentId,
+        decision: action,
+        decided_by: user?.username ?? "unknown",
+      });
+    } catch (err) {
+      console.warn("POST /order 반영 실패 — 화면 상태는 유지:", err);
+    }
   };
 
   const handleLogin = (u) => {

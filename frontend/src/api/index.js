@@ -18,13 +18,21 @@ export async function getDashboardData() {
   return request("/dashboard");
 }
 
-// POST /refresh — sensor_read Lambda 트리거 (서버측 1분 쿨다운, 429 시 remaining 반환)
+// POST /refresh — sensor_read Lambda 트리거 (서버측 1분 쿨다운)
+// 429 응답이면 { cooldown: true, remaining } 반환 — 프론트 쿨다운을 서버 기준으로 동기화
 export async function refreshData(userId = "default") {
-  return request("/refresh", {
+  if (!API_BASE) return null;
+  const res = await fetch(`${API_BASE}/refresh`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ user_id: userId }),
   });
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({}));
+    return { cooldown: true, remaining: body.remaining ?? 60 };
+  }
+  if (!res.ok) throw new Error(`API Gateway 응답 오류: ${res.status} (/refresh)`);
+  return await res.json();
 }
 
 // POST /order — 발주서 생성/승인 상태 변경
