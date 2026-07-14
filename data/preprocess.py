@@ -88,7 +88,7 @@ df_kb.to_csv("processed/kb_data.csv", index=False, encoding="utf-8-sig")
 
 # 3. RAG 지식망용 TXT (7,000개 중 고장 건만 자연어 문서화)
 rag_docs = preprocess_for_rag(df_kb)
-with open("processed/rag_history_knowledge.txt", "w", encoding="utf-8") as f:
+with open("processed/rag_history_knowledge.txt", "w", encoding="utf-8-sig") as f:
     for doc in rag_docs:
         f.write(doc + "\n")
 
