@@ -4,11 +4,17 @@
 import boto3
 import pandas as pd
 import io
+import json
+import os
 
 # 시뮬레이션 설비 수
 NUM_FACILITIES = 5
 # 시연 시 이상 감지가 반드시 보이도록 고장 데이터에서 보장할 최소 설비 수
 NUM_GUARANTEED_FAILURES = 2
+
+REGION = 'us-east-1'
+# 다음 Lambda 함수 이름 (환경변수로 관리, 기본값은 실제 함수명)
+NEXT_LAMBDA = os.environ.get('NEXT_LAMBDA', 'facility-anomaly-filter')
 
 
 def lambda_handler(event, context):
@@ -71,10 +77,20 @@ def lambda_handler(event, context):
                 'tool_wear':      int(row['tool_wear'])
             })
 
-        return {
+        result = {
             'statusCode': 200,
             'sensor_data': sensor_data
         }
+
+        # Lambda2 (anomaly_filter) 비동기 호출 — 파이프라인 체이닝
+        lambda_client = boto3.client('lambda', region_name=REGION)
+        lambda_client.invoke(
+            FunctionName=NEXT_LAMBDA,
+            InvocationType='Event',  # 비동기 호출 (응답 기다리지 않음)
+            Payload=json.dumps({'sensor_data': sensor_data})
+        )
+
+        return result
 
     except Exception as e:
         return {
