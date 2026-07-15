@@ -1,7 +1,10 @@
 // [OrderTable] 발주 현황 — 역할분담서 Step 7 스펙
 // 설비별 승인/거절 → 승인분(재고 부족분)만 통합 발주서 PDF에 포함
-import { useState } from "react";
-import { ChevronRight, FileText, Info, Lock, Printer, X } from "lucide-react";
+import { useRef, useState } from "react";
+import { ChevronRight, Download, FileText, Info, Loader2, Lock, X } from "lucide-react";
+import jsPDF from "jspdf";
+// Tailwind v4의 oklch() 색상 함수를 지원하는 html2canvas 포크
+import html2canvas from "html2canvas-pro";
 import { ORDER_STATUS_CONFIG, PARTS_INVENTORY, getOrderQty } from "../constants.js";
 
 // 설비별 발주 승인/거절/되돌리기 액션 — 설비 상세 패널과 통합 발주서 탭에서 공용으로 사용
@@ -53,31 +56,62 @@ function OrderDecisionActions({ equipmentId, status, canApprove, onAction }) {
   );
 }
 
-// 발주서 PDF 모달 — 승인된 설비의 재고 부족분만 포함, window.print()로 PDF 저장
-// 실제 연동 시 create_order Lambda가 생성한 PDF(S3 presigned URL)를 embed로 교체
+// 발주서 PDF 모달 — 승인된 설비의 재고 부족분만 포함
+// 인쇄 대화상자 없이 html2canvas+jsPDF로 발주서 영역을 PDF 파일로 바로 다운로드
+// 실제 연동 시 create_order Lambda가 생성한 PDF(S3 presigned URL) 다운로드로 교체
 function OrderPdfModal({ order, onClose }) {
+  const printRef = useRef(null);
+  const [saving, setSaving] = useState(false);
   const approvedLines = order.lines.filter(
     (l) => order.decisions[l.equipmentId] === "approved" && getOrderQty(l) > 0
   );
   const equipmentIds = [...new Set(approvedLines.map((l) => l.equipmentId))];
   const totalQty = approvedLines.reduce((sum, l) => sum + getOrderQty(l), 0);
 
+  const handleSave = async () => {
+    if (!printRef.current || saving) return;
+    setSaving(true);
+    try {
+      // 발주서 영역을 캔버스로 렌더 → A4 PDF에 배치 (긴 문서는 여러 페이지로 분할)
+      const canvas = await html2canvas(printRef.current, { scale: 2, backgroundColor: "#ffffff" });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgH = (canvas.height * pageW) / canvas.width;
+      let heightLeft = imgH;
+      let position = 0;
+      pdf.addImage(imgData, "PNG", 0, position, pageW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        position -= pageH;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, pageW, imgH);
+        heightLeft -= pageH;
+      }
+      pdf.save(`${order.id}.pdf`);
+    } catch (err) {
+      console.error("PDF 저장 실패:", err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6 print:p-0 print:bg-white">
-      {/* 인쇄 시 발주서 영역만 출력 */}
-      <style>{`@media print {
-        body * { visibility: hidden; }
-        #po-print-area, #po-print-area * { visibility: visible; }
-        #po-print-area { position: absolute; inset: 0; width: 100%; box-shadow: none; border-radius: 0; }
-      }`}</style>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
       <div className="w-full max-w-2xl max-h-full flex flex-col">
-        <div className="flex items-center justify-end gap-2 mb-3 print:hidden">
+        <div className="flex items-center justify-end gap-2 mb-3">
           <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary/20 hover:bg-primary/30 text-primary border border-primary/30 text-xs font-semibold transition-colors"
+            onClick={handleSave}
+            disabled={saving}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+              saving
+                ? "bg-primary/10 text-primary/60 border-primary/20 cursor-wait"
+                : "bg-primary/20 hover:bg-primary/30 text-primary border-primary/30"
+            }`}
           >
-            <Printer size={13} />
-            인쇄 / PDF 저장
+            {saving ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}
+            {saving ? "저장 중..." : "PDF 저장"}
           </button>
           <button
             onClick={onClose}
@@ -88,7 +122,7 @@ function OrderPdfModal({ order, onClose }) {
           </button>
         </div>
 
-        <div id="po-print-area" className="bg-white text-slate-900 rounded-lg shadow-2xl overflow-y-auto p-10">
+        <div ref={printRef} className="bg-white text-slate-900 rounded-lg shadow-2xl overflow-y-auto p-10">
           <div className="flex items-start justify-between pb-4 border-b-2 border-slate-800">
             <div>
               <h2 className="text-2xl font-bold tracking-tight">발 주 서</h2>
