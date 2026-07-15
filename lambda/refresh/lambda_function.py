@@ -33,7 +33,7 @@ def trigger_sensor_read(use_mock):
         return {"triggered": True, "mock": True}
     import boto3
 
-    region = os.environ.get("AWS_REGION", "ap-northeast-2")
+    region = os.environ.get("AWS_REGION", "us-east-1")
     fn = os.environ.get("SENSOR_READ_FUNCTION", "sensor_read")
     client = boto3.client("lambda", region_name=region)
     client.invoke(FunctionName=fn, InvocationType="Event")  # 비동기 트리거

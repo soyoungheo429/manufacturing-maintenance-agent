@@ -12,3 +12,4 @@ frontend/dist/
 *.zip
 lambda/**/package/
 .kiro
+.vite
