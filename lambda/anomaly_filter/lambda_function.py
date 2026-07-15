@@ -16,8 +16,6 @@ REGION         = 'us-east-1'
 AGENT_ID       = os.environ.get('BEDROCK_AGENT_ID', '')
 AGENT_ALIAS_ID = os.environ.get('BEDROCK_AGENT_ALIAS_ID', '')
 MOCK_MODE      = os.environ.get('MOCK_MODE', 'false').lower() == 'true'
-# 다음 Lambda 함수 이름 (환경변수로 관리)
-NEXT_LAMBDA    = os.environ.get('NEXT_LAMBDA', 'facility-dynamo-save')
 
 # 정상 범위 정의 (AI4I 2020 데이터셋 기준)
 NORMAL_RANGE = {
@@ -294,22 +292,11 @@ def lambda_handler(event, context):
                     'abnormal_sensors': []
                 })
 
-        result = {
+        return {
             'statusCode': 200,
             'analyses':   analyses,
             'errors':     errors
         }
-
-        # Lambda3 (dynamo_save) 비동기 호출 — 설비별로 각각 호출
-        lambda_client = boto3.client('lambda', region_name=REGION)
-        for analysis in analyses:
-            lambda_client.invoke(
-                FunctionName=NEXT_LAMBDA,
-                InvocationType='Event',  # 비동기 호출 (응답 기다리지 않음)
-                Payload=json.dumps(analysis, ensure_ascii=False)
-            )
-
-        return result
 
     except Exception as e:
         return {

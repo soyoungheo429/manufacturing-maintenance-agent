@@ -1,10 +1,29 @@
 {
-  "facility_id": "L55578",
-  "sensor_values": {"air_temp": 298.5, "process_temp": 309.7, "rotation_speed": 2617, "torque": 12.1, "tool_wear": 102},
-  "abnormal_sensors": [{"sensor": "torque", "value": 12.1, "normal_range": "12.6~70.0", "unit": "Nm"}],
-  "risk_level": 46,
-  "status": "WARNING",
-  "failure_type": "PWF",
-  "recommendation": "Power system inspection required. Check drive motor and power driver status.",
-  "required_part": "power driver"
+  "facility_id": "TEST-001",
+  "sensor_values": {
+    "air_temp": 302.5,
+    "process_temp": 310.2,
+    "rotation_speed": 1450,
+    "torque": 68.5,
+    "tool_wear": 215
+  },
+  "abnormal_sensors": [
+    {
+      "sensor": "torque",
+      "value": 68.5,
+      "normal_range": "12.6~70.0",
+      "unit": "Nm"
+    },
+    {
+      "sensor": "tool_wear",
+      "value": 215,
+      "normal_range": "0~221",
+      "unit": "min"
+    }
+  ],
+  "risk_level": 85,
+  "status": "DANGER",
+  "failure_type": "OSF",
+  "recommendation": "Immediate shutdown and cutting tool replacement required.",
+  "required_part": "cutting tool insert"
 }
