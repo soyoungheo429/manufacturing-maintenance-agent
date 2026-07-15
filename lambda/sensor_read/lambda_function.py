@@ -1,9 +1,14 @@
 # Lambda 1: 센서 데이터 읽기
 # 리전: us-east-1
+#
+# 흐름: EventBridge(10분) 또는 refresh → sensor_read → anomaly_filter (체이닝)
+# 이 Lambda는 S3에서 센서 데이터를 읽고, 다음 단계인 anomaly_filter를 비동기 호출한다.
 
 import boto3
 import pandas as pd
 import io
+import json
+import os
 
 # 시뮬레이션 설비 수
 NUM_FACILITIES = 5
@@ -11,6 +16,8 @@ NUM_FACILITIES = 5
 NUM_GUARANTEED_FAILURES = 2
 
 REGION = 'us-east-1'
+# 다음 단계 Lambda (환경변수로 관리, 기본값은 실제 배포 함수명)
+NEXT_LAMBDA = os.environ.get('NEXT_LAMBDA', 'facility-anomaly-filter')
 
 
 def lambda_handler(event, context):
@@ -73,9 +80,18 @@ def lambda_handler(event, context):
                 'tool_wear':      int(row['tool_wear'])
             })
 
+        # 다음 단계(anomaly_filter) 비동기 호출 — 파이프라인 체이닝
+        lambda_client = boto3.client('lambda', region_name=REGION)
+        lambda_client.invoke(
+            FunctionName=NEXT_LAMBDA,
+            InvocationType='Event',  # 비동기 (응답을 기다리지 않음)
+            Payload=json.dumps({'sensor_data': sensor_data})
+        )
+
         return {
             'statusCode': 200,
-            'sensor_data': sensor_data
+            'sensor_data': sensor_data,
+            'message': f'{len(sensor_data)}대 센서 데이터 읽기 완료, anomaly_filter 트리거됨'
         }
 
     except Exception as e:

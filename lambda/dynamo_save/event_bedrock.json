@@ -1,0 +1,15 @@
+{
+  "messageVersion": "1.0",
+  "actionGroup": "save-result",
+  "function": "dynamo_save",
+  "parameters": [
+    {"name": "facility_id", "value": "L49511"},
+    {"name": "risk_level", "value": "78"},
+    {"name": "status", "value": "DANGER"},
+    {"name": "failure_type", "value": "TWF"},
+    {"name": "recommendation", "value": "Tool wear near limit. Replace cutting tool immediately."},
+    {"name": "required_part", "value": "cutting tool insert"},
+    {"name": "sensor_values", "value": "{\"air_temp\": 299.3, \"process_temp\": 308.6, \"rotation_speed\": 1384, \"torque\": 53.6, \"tool_wear\": 218}"},
+    {"name": "abnormal_sensors", "value": "[]"}
+  ]
+}

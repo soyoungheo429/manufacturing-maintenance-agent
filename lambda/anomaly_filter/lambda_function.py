@@ -1,16 +1,24 @@
 # Lambda 2: 센서 이상 전처리 + Bedrock Agent 호출
-# 역할: 정상 범위를 벗어난 센서를 추출하고, 설비별로 Bedrock Agent를 호출하여 분석 결과 반환
 # 리전: us-east-1
 #
-# [Mock 모드]
-# 환경변수 MOCK_MODE=true 설정 시 Bedrock Agent를 실제로 호출하지 않고
-# 더미 분석 결과를 반환합니다. Agent 연결 전 파이프라인 테스트용입니다.
-# Agent 연결 후에는 MOCK_MODE 환경변수를 삭제하거나 false로 변경하면 됩니다.
+# 역할:
+#   1. 센서값을 정상 범위와 비교하여 벗어난 센서(abnormal_sensors)를 추출 (힌트 생성)
+#   2. 설비 5대 전부에 대해 Bedrock Agent를 호출 (정상/이상 무관)
+#      - 범위 벗어난 설비: abnormal_sensors 힌트를 함께 전달
+#      - 범위 안 벗어난 설비: 빈 배열 전달 (Agent가 다른 요인으로 이상 여부 재분석)
+#
+# 이후 처리는 Agent가 담당:
+#   - Knowledge Base(RAG) 검색
+#   - Claude 추론 (위험도/고장유형/권고/부품)
+#   - Action Group 호출: dynamo_save(저장), inventory_check(재고), create_order(발주)
+#
+# 즉 이 Lambda는 Agent 응답을 파싱하거나 저장하지 않는다. Agent를 깨우기만 한다.
+#
+# [Mock 모드] MOCK_MODE=true 시 Agent 없이 호출을 건너뛰고 전처리 결과만 반환 (테스트용)
 
 import boto3
 import json
 import os
-import random
 
 REGION         = 'us-east-1'
 AGENT_ID       = os.environ.get('BEDROCK_AGENT_ID', '')
@@ -29,201 +37,83 @@ NORMAL_RANGE = {
 
 def extract_abnormal_sensors(sensor_data: dict) -> list:
     """
-    단일 설비의 센서값을 정상 범위와 비교하여
-    범위를 벗어난 센서 목록을 반환한다.
+    센서값을 정상 범위와 비교하여 벗어난 센서 목록을 반환한다.
+    이 결과는 Agent에게 "이 센서들이 범위를 벗어났다"는 힌트로 전달된다.
 
     반환 형식:
     [
-        {
-            "sensor": "torque",
-            "value": 122.0,
-            "normal_range": "12.6~70.0",
-            "unit": "Nm"
-        },
+        {"sensor": "torque", "value": 122.0, "normal_range": "12.6~70.0", "unit": "Nm"},
         ...
     ]
     """
     abnormal_sensors = []
-
     for sensor, spec in NORMAL_RANGE.items():
         value = sensor_data.get(sensor)
         if value is None:
             continue
         if value < spec['min'] or value > spec['max']:
             abnormal_sensors.append({
-                'sensor': sensor,
-                'value': value,
+                'sensor':       sensor,
+                'value':        value,
                 'normal_range': f"{spec['min']}~{spec['max']}",
-                'unit': spec['unit']
+                'unit':         spec['unit']
             })
-
     return abnormal_sensors
 
 
-def mock_bedrock_agent(payload: dict) -> dict:
+def invoke_bedrock_agent(payload: dict) -> None:
     """
-    Bedrock Agent 연결 전 테스트용 Mock 함수.
-    abnormal_count에 따라 현실적인 더미 결과를 반환한다.
-    """
-    facility_id    = payload['facility_id']
-    abnormal_count = payload['abnormal_count']
-    abnormal_sensors = payload.get('abnormal_sensors', [])
-    sensor_names   = [s['sensor'] for s in abnormal_sensors]
-
-    if abnormal_count == 0:
-        return {
-            'facility_id':    facility_id,
-            'risk_level':     random.randint(0, 15),
-            'status':         'NORMAL',
-            'failure_type':   'NORMAL',
-            'recommendation': '정상 운전 중입니다. 다음 정기보전일을 준수하세요.',
-            'required_part':  '',
-            'reasoning':      '모든 센서값이 정상 범위 내에 있습니다. (Mock 응답)'
-        }
-
-    # 이상 센서 조합으로 고장 유형 추정
-    if 'tool_wear' in sensor_names and 'torque' in sensor_names:
-        failure_type = 'OSF'
-        risk_level   = random.randint(70, 90)
-        rec          = '즉시 가동 중단 후 절삭공구 교체 필요. 토크와 공구 마모가 동시에 임계값을 초과했습니다.'
-        part         = '절삭공구 인서트'
-    elif 'tool_wear' in sensor_names:
-        failure_type = 'TWF'
-        risk_level   = random.randint(55, 75)
-        rec          = '공구 마모가 한계치에 근접했습니다. 다음 교대 전 절삭공구 교체를 권장합니다.'
-        part         = '절삭공구 인서트'
-    elif 'air_temp' in sensor_names or 'process_temp' in sensor_names:
-        failure_type = 'HDF'
-        risk_level   = random.randint(50, 70)
-        rec          = '냉각 시스템 점검이 필요합니다. 냉각팬 및 방열판 상태를 확인하세요.'
-        part         = '냉각팬'
-    elif 'torque' in sensor_names or 'rotation_speed' in sensor_names:
-        failure_type = 'PWF'
-        risk_level   = random.randint(40, 65)
-        rec          = '전력 계통 점검이 필요합니다. 구동 모터 및 전력 드라이버 상태를 확인하세요.'
-        part         = '전력 드라이버'
-    else:
-        failure_type = 'RNF'
-        risk_level   = random.randint(30, 50)
-        rec          = '명확한 패턴 없는 이상이 감지되었습니다. 전반적인 설비 점검을 권장합니다.'
-        part         = ''
-
-    status = 'DANGER' if risk_level >= 70 else 'WARNING'
-
-    return {
-        'facility_id':    facility_id,
-        'risk_level':     risk_level,
-        'status':         status,
-        'failure_type':   failure_type,
-        'recommendation': rec,
-        'required_part':  part,
-        'reasoning':      f'이상 센서 {sensor_names} 감지. {failure_type} 패턴으로 판단. (Mock 응답)'
-    }
-
-
-def invoke_bedrock_agent(payload: dict) -> dict:
-    """
-    단일 설비 데이터를 Bedrock Agent에 전달하고 분석 결과를 반환한다.
-
-    payload 구조:
-    {
-        "facility_id": "L47340",
-        "product_type": "L",
-        "sensor_values": { ... },
-        "abnormal_sensors": [ ... ],
-        "abnormal_count": 1
-    }
+    단일 설비 데이터를 Bedrock Agent에 전달하여 세션을 시작한다.
+    Agent가 KB 검색 + 추론 + Action Group(dynamo_save/inventory_check/create_order)을
+    스스로 수행하므로, 이 함수는 Agent를 깨우기만 하고 응답은 파싱하지 않는다.
     """
     client = boto3.client('bedrock-agent-runtime', region_name=REGION)
-
-    input_text = json.dumps(payload, ensure_ascii=False)
-    session_id = f"session-{payload['facility_id']}"
 
     response = client.invoke_agent(
         agentId=AGENT_ID,
         agentAliasId=AGENT_ALIAS_ID,
-        sessionId=session_id,
-        inputText=input_text,
+        sessionId=f"session-{payload['facility_id']}",
+        inputText=json.dumps(payload, ensure_ascii=False),
         endSession=True
     )
 
-    # 스트리밍 응답 수집
-    raw_output = ''
+    # 스트리밍 응답을 끝까지 소비해야 Agent 실행이 완료됨 (내용은 사용하지 않음)
     for event in response.get('completion', []):
-        chunk = event.get('chunk', {})
-        if 'bytes' in chunk:
-            raw_output += chunk['bytes'].decode('utf-8')
-
-    return parse_agent_response(raw_output, payload['facility_id'])
-
-
-def parse_agent_response(raw: str, facility_id: str) -> dict:
-    """
-    Agent 응답 문자열에서 JSON을 추출한다.
-    순수 JSON이 아닌 경우(앞뒤 텍스트 포함)에도 처리한다.
-    """
-    raw = raw.strip()
-
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-
-    start = raw.find('{')
-    end   = raw.rfind('}')
-    if start != -1 and end != -1:
-        try:
-            return json.loads(raw[start:end + 1])
-        except json.JSONDecodeError:
-            pass
-
-    # 파싱 실패 시 에러 구조 반환 (파이프라인 중단 방지)
-    return {
-        'facility_id':    facility_id,
-        'risk_level':     0,
-        'status':         'UNKNOWN',
-        'failure_type':   'UNKNOWN',
-        'recommendation': 'Bedrock Agent 응답 파싱 실패 — 수동 점검 필요',
-        'required_part':  '',
-        'reasoning':      f'Raw response: {raw[:300]}'
-    }
+        _ = event.get('chunk', {})
 
 
 def lambda_handler(event, context):
     """
     센서 이상 전처리 + Bedrock Agent 호출 Lambda
 
-    입력 (event) — Lambda1 출력 구조:
-        sensor_data: list[dict]
-        [
-            {
-                "facility_id": "L47340",
-                "product_type": "L",
-                "air_temp": 298.1,
-                "process_temp": 308.6,
-                "rotation_speed": 1500,
-                "torque": 122.0,
-                "tool_wear": 180
-            },
-            ...
-        ]
+    입력 (event) — sensor_read 출력 구조:
+        {
+            "sensor_data": [
+                {
+                    "facility_id": "L47340",
+                    "product_type": "L",
+                    "air_temp": 298.1, "process_temp": 308.6,
+                    "rotation_speed": 1500, "torque": 122.0, "tool_wear": 180
+                },
+                ...  (설비 5대)
+            ]
+        }
 
     출력:
-        analyses: list[dict]  — 설비별 Bedrock Agent 분석 결과
-        [
-            {
-                "facility_id": "L47340",
-                "risk_level": 75,
-                "status": "DANGER",
-                "failure_type": "TWF",
-                "recommendation": "...",
-                "required_part": "...",
-                "reasoning": "...",
-                "sensor_values": { ... },
-                "abnormal_sensors": [ ... ]
-            },
-            ...
-        ]
+        {
+            "statusCode": 200,
+            "processed": [
+                {
+                    "facility_id": "L47340",
+                    "abnormal_count": 2,
+                    "agent_invoked": true
+                },
+                ...
+            ]
+        }
+
+    실제 분석 결과(위험도/권고 등)는 Agent가 Action Group(dynamo_save)으로
+    DynamoDB에 저장하므로, 이 Lambda의 반환값에는 포함되지 않는다.
     """
     if not MOCK_MODE and (not AGENT_ID or not AGENT_ALIAS_ID):
         return {
@@ -233,68 +123,56 @@ def lambda_handler(event, context):
 
     try:
         sensor_data_list = event.get('sensor_data', [])
-
         if not sensor_data_list:
             return {
                 'statusCode': 400,
                 'error': 'sensor_data 필드가 없거나 비어있습니다'
             }
 
-        analyses = []
-        errors   = []
+        processed = []
+        errors    = []
 
         for sensor_data in sensor_data_list:
             facility_id = sensor_data.get('facility_id', 'UNKNOWN')
 
             try:
-                # 원본 센서값 보존 (facility_id, product_type 제외)
+                # 원본 센서값 (facility_id, product_type 제외)
                 sensor_values = {
                     k: v for k, v in sensor_data.items()
                     if k not in ('facility_id', 'product_type')
                 }
 
-                # 정상 범위 벗어난 센서 추출
+                # 정상 범위 벗어난 센서 추출 (힌트)
                 abnormal_sensors = extract_abnormal_sensors(sensor_data)
 
-                # Bedrock Agent 호출 페이로드 구성
+                # Agent에 전달할 페이로드
                 payload = {
-                    'facility_id':     facility_id,
-                    'product_type':    sensor_data.get('product_type', ''),
-                    'sensor_values':   sensor_values,
+                    'facility_id':      facility_id,
+                    'product_type':     sensor_data.get('product_type', ''),
+                    'sensor_values':    sensor_values,
                     'abnormal_sensors': abnormal_sensors,
-                    'abnormal_count':  len(abnormal_sensors)
+                    'abnormal_count':   len(abnormal_sensors)
                 }
 
-                # Bedrock Agent 호출 (Mock 모드면 더미 결과 반환)
-                if MOCK_MODE:
-                    analysis = mock_bedrock_agent(payload)
-                else:
-                    analysis = invoke_bedrock_agent(payload)
+                # 정상/이상 무관하게 5대 전부 Agent 호출 (Mock 모드면 건너뜀)
+                agent_invoked = False
+                if not MOCK_MODE:
+                    invoke_bedrock_agent(payload)
+                    agent_invoked = True
 
-                # dynamo_save에서 필요한 필드 병합
-                analysis['sensor_values']    = sensor_values
-                analysis['abnormal_sensors'] = abnormal_sensors
-
-                analyses.append(analysis)
+                processed.append({
+                    'facility_id':    facility_id,
+                    'abnormal_count': len(abnormal_sensors),
+                    'agent_invoked':  agent_invoked
+                })
 
             except Exception as e:
-                # 개별 설비 실패 시 파이프라인 전체 중단 방지
+                # 개별 설비 실패 시 나머지 설비 처리는 계속
                 errors.append({'facility_id': facility_id, 'error': str(e)})
-                analyses.append({
-                    'facility_id':    facility_id,
-                    'risk_level':     0,
-                    'status':         'UNKNOWN',
-                    'failure_type':   'UNKNOWN',
-                    'recommendation': f'분석 중 오류 발생: {str(e)}',
-                    'required_part':  '',
-                    'reasoning':      'Lambda 처리 오류',
-                    'sensor_values':  sensor_data,
-                    'abnormal_sensors': []
-                })
 
         return {
             'statusCode': 200,
-            'analyses':   analyses,
+            'processed':  processed,
             'errors':     errors
         }
 
