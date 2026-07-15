@@ -17,6 +17,15 @@ import RecommendationPanel from "./components/RecommendationPanel.jsx";
 import ConsolidatedOrderView from "./components/OrderTable.jsx";
 import RefreshButton from "./components/RefreshButton.jsx";
 
+export function transitionSavedFacilitiesToOrdered(decisions, savedFacilityIds) {
+  const savedFacilityIdSet = new Set(savedFacilityIds ?? []);
+  const next = { ...decisions };
+  for (const id of savedFacilityIdSet) {
+    if (next[id] === "approved") next[id] = "ordered";
+  }
+  return next;
+}
+
 export default function App() {
   const [user, setUser] = useState(() => {
     try {
@@ -74,6 +83,11 @@ export default function App() {
     return () => clearInterval(timer);
   }, [loadDashboard]);
 
+  // 초기 마운트 시 1회 즉시 조회 — 10분 스케줄과 별개로, 화면 진입 시 목데이터 대신 최신 데이터를 바로 표시
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
   // 수동 새로고침 쿨다운 (자동 스케줄에는 영향 없음)
   // 마감 시각(wall-clock) 기준으로 계산해 백그라운드 탭 타이머 스로틀링에도 정확
   useEffect(() => {
@@ -104,7 +118,12 @@ export default function App() {
     await loadDashboard();
   };
 
-  const anomalyList = equipments.filter((e) => e.status !== "normal");
+  const anomalyList = equipments
+    .filter((e) => e.status !== "normal")
+    .sort((a, b) => {
+      const rank = { critical: 0, warning: 1, normal: 2 };
+      return rank[a.status] - rank[b.status];
+    });
   const allList = [...equipments].sort((a, b) => {
     const rank = { critical: 0, warning: 1, normal: 2 };
     return rank[a.status] - rank[b.status];
@@ -136,6 +155,33 @@ export default function App() {
       });
     } catch (err) {
       console.warn("POST /order 반영 실패 — 화면 상태는 유지:", err);
+    }
+  };
+
+  // 발주서 PDF 다운로드 완료 → 실제 저장된 승인 설비만 발주완료(ordered)로 전환
+  const handleMarkOrdered = async (savedFacilityIds) => {
+    // 낙관적 로컬 업데이트 — UI 즉시 반영
+    setOrder((prev) => ({
+      ...prev,
+      decisions: transitionSavedFacilitiesToOrdered(prev.decisions, savedFacilityIds),
+    }));
+
+    // 실제 발주완료(ordered)로 전환된 설비만 서버에 반영 — transitionSavedFacilitiesToOrdered와 동일한 가드(approved -> ordered)
+    const orderedFacilityIds = [...new Set(savedFacilityIds ?? [])].filter(
+      (id) => order.decisions[id] === "approved"
+    );
+    for (const id of orderedFacilityIds) {
+      try {
+        // create_order Lambda update_decision 경로("ordered" 허용)로 발주완료 상태 영속화
+        await createOrder({
+          order_id: order.id,
+          facility_id: id,
+          decision: "ordered",
+          decided_by: user?.username ?? "unknown",
+        });
+      } catch (err) {
+        console.warn("POST /order 반영 실패 — 화면 상태는 유지:", err);
+      }
     }
   };
 
@@ -259,6 +305,7 @@ export default function App() {
             order={order}
             canApprove={user.role === "admin"}
             onAction={handleOrderAction}
+            onMarkOrdered={handleMarkOrdered}
           />
         </div>
       ) : (

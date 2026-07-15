@@ -260,17 +260,15 @@ export default function RecommendationPanel({ eq, order, canApprove, onOrderActi
 
       {/* Order / Action */}
       {eq.status === "warning" ? (
-        <section>
-          <div className="bg-amber-500/8 border border-amber-500/25 rounded-xl p-5 flex items-start gap-3">
-            <AlertTriangle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-amber-300 mb-1">예방 점검 권고</p>
-              <p className="text-xs text-amber-400/80 leading-relaxed">
-                현재 약한 고장 신호(TWF)만 감지되었습니다. 즉각적인 발주는 필요하지 않으나, 다음 정기보전 시 점검 일정을 반드시 확보하세요.
-              </p>
-            </div>
+        <div className="bg-amber-500/8 border border-amber-500/25 rounded-xl p-5 flex items-start gap-3">
+          <AlertTriangle size={16} className="text-amber-400 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-sm font-semibold text-amber-300 mb-1">예방 점검 권고</p>
+            <p className="text-xs text-amber-400/80 leading-relaxed">
+              현재 약한 고장 신호(TWF)만 감지되었습니다. 즉각적인 발주는 필요하지 않으나, 다음 정기보전 시 점검 일정을 반드시 확보하세요.
+            </p>
           </div>
-        </section>
+        </div>
       ) : eq.status === "critical" ? (
         <section>
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-widest mb-3 flex items-center gap-2">
