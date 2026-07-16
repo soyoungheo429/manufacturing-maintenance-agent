@@ -72,6 +72,42 @@ def _parse_qty(raw):
 
 
 def handler(event, context):
+    # ── Bedrock Agent Action Group 호출인 경우 ──
+    if isinstance(event, dict) and 'actionGroup' in event:
+        # 파라미터 추출
+        params = {}
+        for p in event.get('parameters', []):
+            params[p['name']] = p.get('value')
+
+        part = params.get('required_part', '')
+        qty = int(params.get('qty', 1)) if params.get('qty') else 1
+        use_mock = True  # Agent 호출 시 MVP 목업 사용
+
+        result = check_part(part, qty, use_mock)
+
+        # Bedrock Agent 응답 형식
+        if result['action'] == 'CREATE_ORDER':
+            body_text = f"재고 부족: {part} 재고 {result['stock']}개. 발주가 필요합니다."
+        elif result['action'] == 'UNKNOWN_PART':
+            body_text = f"미등록 부품: {part}. 부품 번호를 확인해주세요."
+        else:
+            body_text = f"재고 확인: {part} 재고 {result['stock']}개 보유. 추가 발주 불필요."
+
+        return {
+            "messageVersion": "1.0",
+            "response": {
+                "actionGroup": event.get("actionGroup", ""),
+                "function": event.get("function", ""),
+                "functionResponse": {
+                    "responseBody": {
+                        "TEXT": {"body": body_text}
+                    }
+                }
+            }
+        }
+
+    # ── 기존 API Gateway / 콘솔 테스트 호출 ──
+
     body = parse_event_body(event)
     use_mock = body.get("use_mock", False)
 
