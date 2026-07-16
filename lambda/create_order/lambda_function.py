@@ -92,6 +92,45 @@ def update_decision(body, use_mock):
 
 
 def handler(event, context):
+    # ── Bedrock Agent Action Group 호출인 경우 ──
+    if isinstance(event, dict) and 'actionGroup' in event:
+        params = {}
+        for p in event.get('parameters', []):
+            params[p['name']] = p.get('value')
+
+        facility_id = params.get('facility_id', '')
+        part = params.get('required_part', '')
+        recommendation = params.get('recommendation', '')
+
+        body = {
+            "facility_id": facility_id,
+            "required_part": part,
+            "recommendation": recommendation,
+            "qty": 1,
+            "use_mock": True
+        }
+
+        # 기존 create_order 로직 호출
+        result = create_order(body, use_mock=True)
+
+        # Bedrock Agent 응답 형식으로 래핑
+        body_text = f"발주서 생성 완료: 설비 {facility_id}, 부품 {part}"
+
+        return {
+            "messageVersion": "1.0",
+            "response": {
+                "actionGroup": event.get("actionGroup", ""),
+                "function": event.get("function", ""),
+                "functionResponse": {
+                    "responseBody": {
+                        "TEXT": {"body": body_text}
+                    }
+                }
+            }
+        }
+
+    # ── 기존 API Gateway / 콘솔 호출 ──
+
     body = parse_event_body(event)
     use_mock = body.get("use_mock", False)
 
