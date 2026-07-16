@@ -11,5 +11,6 @@ frontend/dist/
 .DS_Store
 *.zip
 lambda/**/package/
-.kiro
+backup/
+.kiro/
 .vite
