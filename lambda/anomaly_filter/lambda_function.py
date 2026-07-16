@@ -99,12 +99,18 @@ def invoke_bedrock_agent(payload: dict) -> None:
         agentAliasId=AGENT_ALIAS_ID,
         sessionId=f"session-{payload['facility_id']}",
         inputText=json.dumps(payload, ensure_ascii=False),
-        endSession=True
+        enableTrace=True   # [임시 디버깅] Agent 추론/도구호출 과정 로그 확인용
     )
 
-    # 스트리밍 응답을 끝까지 소비해야 Agent 실행이 완료됨 (내용은 사용하지 않음)
+    # 스트리밍 응답 소비 + 디버깅 로그
+    final_text = ''
     for event in response.get('completion', []):
-        _ = event.get('chunk', {})
+        if 'chunk' in event:
+            final_text += event['chunk'].get('bytes', b'').decode('utf-8', errors='ignore')
+        # [임시 디버깅] trace로 Agent가 어떤 도구를 부르려 하는지 확인
+        if 'trace' in event:
+            print('AGENT_TRACE:', json.dumps(event['trace'], ensure_ascii=False, default=str)[:2000])
+    print('AGENT_FINAL_RESPONSE:', final_text[:1000])
 
 
 def lambda_handler(event, context):
