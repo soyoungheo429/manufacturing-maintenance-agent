@@ -17,20 +17,25 @@ export const MANUAL_REFRESH_COOLDOWN_SEC = 60;
 export const AUTH_STORAGE_KEY = "pmd_auth";
 
 // 부품 재고 현황 — 실제 연동 시 inventory_check Lambda가 DynamoDB parts-inventory 조회로 교체
+// 정비 매뉴얼 기준 고장 유형별 부품: TWF→TW-101, HDF→HD-202, PWF→PW-303, OSF→OS-404
 export const PARTS_INVENTORY = {
-  "절삭공구 인서트 #T-4812": 5,
-  "스핀들 베어링 6204-2RS": 0,
-  "구동 모터 3상 1.5kW": 0,
-  "전력 드라이버 FR-A740-0.4K": 1,
-  "냉각팬 AC-9238": 1,
-  "방열판 HS-120AL": 0,
-  "냉각수 펌프 CP-40W": 0,
+  "TW-101": 5, // 공구날 (예방 교체용, 재고 충분)
+  "HD-202": 0, // 냉각장치 (재고 없음 → 발주)
+  "PW-303": 1, // 전원장치 (재고 있음 → 충당)
+  "OS-404": 0, // 베어링/과부하 (재고 없음 → 발주)
 };
 
 // 재고로 충당하고 남는 부족분만 발주 — 0이면 발주 불필요(재고 충당 또는 참고용)
 export function getOrderQty(line) {
   if (line.referenceOnly) return 0;
-  const stock = PARTS_INVENTORY[line.part] ?? 0;
+  // Prefer the real parts-inventory stock attached by the backend (line.stock).
+  // Fall back to the static PARTS_INVENTORY lookup — by part code first
+  // (line.partId), then display name — for lines without a stock field.
+  // Backward compatible: lines without stock behave exactly as before.
+  const stock =
+    typeof line.stock === "number"
+      ? line.stock
+      : PARTS_INVENTORY[(line.partId && line.partId) || line.part] ?? 0;
   return Math.max(0, line.qty - stock);
 }
 
@@ -82,6 +87,8 @@ export const ORDER_STATUS_CONFIG = {
   pending: { label: "대기중", cls: "bg-slate-500/20 text-slate-300 border border-slate-500/30" },
   approved: { label: "승인", cls: "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30" },
   rejected: { label: "거절", cls: "bg-red-500/20 text-red-400 border border-red-500/30" },
+  // 발주서 PDF 다운로드 완료 → "발주 완료" 섹션으로 이동
+  ordered: { label: "발주완료", cls: "bg-sky-500/20 text-sky-400 border border-sky-500/30" },
 };
 
 export const SENSOR_RANGES = {

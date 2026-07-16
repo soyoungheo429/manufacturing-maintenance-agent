@@ -14,7 +14,7 @@ def _get_dynamodb():
     if _dynamodb is None:
         import boto3  # lazy import — 목업 실행 시 boto3 미설치여도 무방
 
-        region = os.environ.get("AWS_REGION", "ap-northeast-2")
+        region = os.environ.get("AWS_REGION", "us-east-1")
         _dynamodb = boto3.resource("dynamodb", region_name=region)
     return _dynamodb
 

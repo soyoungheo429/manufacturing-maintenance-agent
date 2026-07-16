@@ -13,3 +13,4 @@ frontend/dist/
 lambda/**/package/
 backup/
 .kiro/
+.vite

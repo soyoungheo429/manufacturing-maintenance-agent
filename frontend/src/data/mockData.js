@@ -25,7 +25,7 @@ export const equipmentData = [
         { id: "CASE-2023-1103", date: "2023-11-03", description: "유사 strain 값에서 스핀들 베어링 손상 선행 발생" },
       ],
       recommendation: "즉시 가동 중단 후 절삭공구 교체 필요. 스핀들 베어링 상태 점검 병행 권고. 교체 후 브레이크인 사이클 실행.",
-      parts: ["절삭공구 인서트 #T-4812", "스핀들 베어링 6204-2RS"],
+      parts: ["OS-404"],
     },
   },
   {
@@ -50,7 +50,7 @@ export const equipmentData = [
         { id: "CASE-2025-0214", date: "2025-02-14", description: "M형 전력 저하 — 전력 드라이버 열화 원인 확인, 드라이버 교체 후 정상화" },
       ],
       recommendation: "전력 계통 점검 우선 시행. 전력 드라이버 출력 전압/전류 파형 측정. 이상 지속 시 구동 모터 절연저항 측정 및 교체 검토.",
-      parts: ["구동 모터 3상 1.5kW", "전력 드라이버 FR-A740-0.4K"],
+      parts: ["PW-303"],
     },
   },
   {
@@ -77,7 +77,7 @@ export const equipmentData = [
         { id: "CASE-2024-1201", date: "2024-12-01", description: "HDF+TWF 복합 발생, 가동 중단 없이 방치하여 주축 손상까지 진행됨" },
       ],
       recommendation: "즉시 가동 중단. 냉각팬·방열판·냉각수 펌프 점검 및 교체. 공구마모 주의 구간 진입으로 절삭공구 예방 교체 병행 권고. 재가동 전 열화상 점검 필수.",
-      parts: ["냉각팬 AC-9238", "방열판 HS-120AL", "냉각수 펌프 CP-40W", "절삭공구 인서트 #T-4812"],
+      parts: ["HD-202", "TW-101"],
     },
   },
   {
@@ -101,7 +101,7 @@ export const equipmentData = [
     maintenanceRec: {
       similarCases: [],
       recommendation: "다음 정기보전 시 절삭공구 교체 스케줄링 권고. 현재 가동 유지 가능. 마모 진행 속도 모니터링 강화.",
-      parts: ["절삭공구 인서트 #T-4812"],
+      parts: ["TW-101"],
     },
   },
   {
@@ -179,17 +179,11 @@ export const consolidatedOrderData = {
   // 설비별 승인 상태 — 승인된 설비의 라인만 최종 발주서(PDF)에 포함
   decisions: { L47340: "pending", M52891: "pending", H31204: "pending" },
   lines: [
-    // OSF → 절삭공구, 베어링
-    { equipmentId: "L47340", part: "절삭공구 인서트 #T-4812", qty: 1 },
-    { equipmentId: "L47340", part: "스핀들 베어링 6204-2RS", qty: 1 },
-    // PWF → 구동 모터, 전력 드라이버
-    { equipmentId: "M52891", part: "구동 모터 3상 1.5kW", qty: 1 },
-    { equipmentId: "M52891", part: "전력 드라이버 FR-A740-0.4K", qty: 1 },
-    // HDF → 냉각팬, 방열판, 냉각수 펌프
-    { equipmentId: "H31204", part: "냉각팬 AC-9238", qty: 2 },
-    { equipmentId: "H31204", part: "방열판 HS-120AL", qty: 1 },
-    { equipmentId: "H31204", part: "냉각수 펌프 CP-40W", qty: 1 },
-    // TWF 동반 신호 → 절삭공구 예방 교체분은 참고용 기재 (requires_purchase_order=false)
-    { equipmentId: "H31204", part: "절삭공구 인서트 #T-4812", qty: 1, referenceOnly: true },
+    // 매뉴얼 기준 고장 유형별 부품 1종: OSF→OS-404, PWF→PW-303, HDF→HD-202, TWF→TW-101
+    { equipmentId: "L47340", part: "OS-404", qty: 1 }, // OSF
+    { equipmentId: "M52891", part: "PW-303", qty: 1 }, // PWF
+    { equipmentId: "H31204", part: "HD-202", qty: 1 }, // HDF
+    // TWF 동반 신호 → 예방 교체분은 참고용 기재 (requires_purchase_order=false)
+    { equipmentId: "H31204", part: "TW-101", qty: 1, referenceOnly: true },
   ],
 };

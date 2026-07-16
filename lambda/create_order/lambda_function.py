@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from common.utils import parse_event_body, api_response  # noqa: E402
 
-VALID_DECISIONS = ("pending", "approved", "rejected")
+VALID_DECISIONS = ("pending", "approved", "rejected", "ordered")
 
 
 def _now_iso():
@@ -85,7 +85,7 @@ def update_decision(body, use_mock):
         from common.aws import get_table
 
         table = get_table("DYNAMODB_ORDER_TABLE", "purchase-orders")
-        # PK: order_id, SK: timestamp — 설비별 결정 이력을 append
+        # PK: order_id, SK: timestamp — 설비별 결정 이력을 append은
         table.put_item(Item={**record, "timestamp": record["decided_at"]})
 
     return api_response(200, {"updated": True, "decision": record})
