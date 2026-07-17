@@ -1,0 +1,10 @@
+{
+  "messageVersion": "1.0",
+  "actionGroup": "range-check",
+  "function": "range_check",
+  "parameters": [
+    {"name": "equipment_id", "type": "string", "value": "L47340"},
+    {"name": "sensor_type", "type": "string", "value": "tool_wear"},
+    {"name": "sensor_value", "type": "string", "value": "231"}
+  ]
+}

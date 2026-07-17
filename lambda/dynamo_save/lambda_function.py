@@ -1,21 +1,35 @@
-# Lambda 3: 분석 결과 DynamoDB 저장 (Bedrock Action Group)
-# 역할: Bedrock Agent가 분석한 결과(위험도/고장유형/권고/부품)를 DynamoDB에 저장
+# db_save Lambda (Bedrock Action Group) — 구 이름: dynamo_save
+# 역할: Bedrock Agent가 분석한 결과를 DynamoDB(detection-results)에 저장
 # 리전: us-east-1
 #
-# 동작:
-#   anomaly_filter가 먼저 원본 센서 데이터를 저장(status=PENDING)해 둔다.
-#   이 Lambda는 해당 facility_id의 "최신 레코드"를 찾아 분석 결과로 갱신(update)한다.
-#   → 원본 센서값은 anomaly_filter가 정확히 저장하고, 분석 결과만 여기서 덮어씀.
-#   → Agent는 facility_id만 정확히 넘기면 되고, 센서값을 relay할 필요가 없다.
+# 스펙 변경 배경:
+#   Agentic 아키텍처 전환에 따라 Action Group 입력 스펙이 아래처럼 재정의됨.
+#     equipment_id, timestamp, sensor_data, is_anomaly, reasoning,
+#     actions_taken, recommended_action  →  save_status
 #
-# 매칭되는 PENDING 레코드가 없으면(예: 단독 테스트) 새 레코드를 생성한다(fallback).
+#   다만 dashboard_data(프론트 연동, 다른 담당자 파트)가 기존 필드명
+#   (facility_id/status/risk_level/failure_type/sensor_values/
+#   recommendation/required_part)에 강하게 의존하고 있어, 필드명을 완전히
+#   갈아엎으면 대시보드가 깨진다. 그래서 이 Lambda는 새 스펙의 파라미터를
+#   받아 기존 DynamoDB 스키마로 매핑하여 저장한다 (하위 호환 유지).
+#
+#   새 파라미터 ↔ 기존 컬럼 매핑:
+#     equipment_id       → facility_id (PK)
+#     timestamp           → timestamp (SK, 없으면 저장 시각으로 자동 생성)
+#     sensor_data          → sensor_values (JSON 문자열로 저장)
+#     is_anomaly           → status ('DANGER'/'NORMAL', risk_level 있으면 그걸로 재계산)
+#     reasoning            → recommendation에 병합 (recommended_action과 함께)
+#     actions_taken        → actions_taken 컬럼 신규 추가 (기존 스키마에 없던 필드)
+#     recommended_action   → recommendation (기존 필드명 유지, dashboard_data가 이 필드를 읽음)
+#
+#   구 파라미터(facility_id/risk_level/status/failure_type/recommendation/
+#   required_part)도 그대로 지원한다 — 다른 Action Group이나 기존 테스트가
+#   구 파라미터로 호출해도 정상 동작한다.
 #
 # 입력: Bedrock Action Group 형식 / 일반 JSON 형식 모두 지원.
-# 파라미터(6개): facility_id, risk_level, status, failure_type, recommendation, required_part
 
 import boto3
 import json
-import os
 from datetime import datetime
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key
@@ -32,49 +46,6 @@ def determine_status(risk_level) -> str:
         return 'WARNING'
     else:
         return 'NORMAL'
-
-
-# ══════════════════════════════════════════════════════════════════════
-# [알림 추가] Critical(DANGER) 확정 시 SNS 발행 — 발표용 알림 기능
-# 아래 _sns / _get_sns / _notify_if_critical 3개는 알림을 위해 추가된 코드다.
-# 기존 저장 로직과 독립적이며, 실패해도 저장에는 전혀 영향을 주지 않는다.
-# ══════════════════════════════════════════════════════════════════════
-_sns = None
-
-
-def _get_sns():
-    """SNS 클라이언트를 지연 생성해 캐시 (알림 기능용 추가 코드)."""
-    global _sns
-    if _sns is None:
-        _sns = boto3.client('sns', region_name=REGION)
-    return _sns
-
-
-def _notify_if_critical(facility_id, status, failure_type, risk_level, recommendation):
-    """[알림 추가] status가 DANGER/CRITICAL이면 긴급 알림 1건 발행.
-
-    SNS_CRITICAL_ALERT_TOPIC 환경변수가 없으면 조용히 건너뛰고,
-    발행 실패해도 예외를 삼켜 저장 로직 흐름을 막지 않는다.
-    """
-    if str(status).upper() not in ('DANGER', 'CRITICAL'):
-        return
-    topic_arn = os.environ.get('SNS_CRITICAL_ALERT_TOPIC')
-    if not topic_arn:
-        print('[dynamo_save] SNS_CRITICAL_ALERT_TOPIC 미설정 — 알림 스킵')
-        return
-    try:
-        _get_sns().publish(
-            TopicArn=topic_arn,
-            Subject=f'[긴급] {facility_id} 고장 확정'[:100],
-            Message=(
-                f'설비 {facility_id}에서 고장이 확진되었습니다.\n'
-                f'고장 유형: {failure_type}\n'
-                f'위험도: {risk_level}\n'
-                f'권고: {recommendation}'
-            ),
-        )
-    except Exception as e:  # noqa: BLE001 — 알림 실패가 저장을 막지 않도록
-        print(f'[dynamo_save] SNS 발행 실패(무시): {e}')
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -96,6 +67,8 @@ def _coerce(value):
             return json.loads(s)
         except json.JSONDecodeError:
             return value
+    if s.lower() in ('true', 'false'):
+        return s.lower() == 'true'
     try:
         return float(s) if '.' in s else int(s)
     except ValueError:
@@ -135,6 +108,53 @@ def _bedrock_response(event: dict, body_text: str) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────
+# 새 스펙 → 기존 스키마 매핑
+# ─────────────────────────────────────────────────────────────────────
+def _normalize_input(data: dict) -> dict:
+    """
+    새 스펙(equipment_id/sensor_data/is_anomaly/reasoning/actions_taken/
+    recommended_action)과 구 스펙(facility_id/risk_level/status/
+    failure_type/recommendation/required_part)을 모두 받아
+    하나의 내부 표현으로 정규화한다. 새 스펙 필드가 있으면 우선한다.
+    """
+    facility_id = data.get('equipment_id') or data.get('facility_id')
+
+    # sensor_data(신규) 우선, 없으면 sensor_values(구) 사용
+    sensor_values = data.get('sensor_data')
+    if sensor_values is None:
+        sensor_values = data.get('sensor_values', {})
+
+    # is_anomaly(신규, bool) → status. status(구)가 명시되면 그게 우선.
+    status = data.get('status')
+    is_anomaly = data.get('is_anomaly')
+    risk_level = data.get('risk_level', 0)
+    if status is None and is_anomaly is not None:
+        status = 'DANGER' if is_anomaly else 'NORMAL'
+    if status is None:
+        status = determine_status(risk_level)
+
+    # recommended_action(신규) 우선, 없으면 recommendation(구) 사용.
+    # reasoning(신규)이 있으면 뒤에 이어붙여 근거를 함께 저장한다.
+    recommendation = data.get('recommended_action') or data.get('recommendation', '')
+    reasoning = data.get('reasoning')
+    if reasoning:
+        recommendation = f"{recommendation} (근거: {reasoning})".strip()
+
+    return {
+        'facility_id':      facility_id,
+        'timestamp':        data.get('timestamp'),
+        'sensor_values':     sensor_values,
+        'abnormal_sensors':  data.get('abnormal_sensors', []),
+        'status':            status,
+        'risk_level':        risk_level,
+        'failure_type':      data.get('failure_type', ''),
+        'recommendation':    recommendation,
+        'required_part':     data.get('required_part', ''),
+        'actions_taken':     data.get('actions_taken', '')
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────
 # 핵심 저장 로직
 # ─────────────────────────────────────────────────────────────────────
 def _find_latest_timestamp(table, facility_id: str):
@@ -148,34 +168,37 @@ def _find_latest_timestamp(table, facility_id: str):
     return items[0]['timestamp'] if items else None
 
 
-def save_detection(data: dict) -> dict:
+def save_detection(raw_data: dict) -> dict:
     """
-    Agent 분석 결과를 저장한다.
-    - anomaly_filter가 남긴 최신 레코드가 있으면 → 그 레코드를 update
+    Agent 분석 결과를 저장한다. 새/구 파라미터 스펙을 모두 지원한다(_normalize_input).
+    - 기존 최신 레코드가 있으면 → 그 레코드를 update
     - 없으면 → 새 레코드 생성 (fallback, 단독 테스트 대비)
     """
-    facility_id = data.get('facility_id')
+    data = _normalize_input(raw_data)
+    facility_id = data['facility_id']
     if not facility_id:
-        raise ValueError('facility_id는 필수 입력값입니다')
+        raise ValueError('equipment_id(또는 facility_id)는 필수 입력값입니다')
 
-    risk_level     = data.get('risk_level', 0)
-    failure_type   = data.get('failure_type', '')
-    recommendation = data.get('recommendation', '')
-    required_part  = data.get('required_part', '')
-    status         = data.get('status') or determine_status(risk_level)
+    status         = data['status']
+    risk_level      = data['risk_level']
+    failure_type    = data['failure_type']
+    recommendation  = data['recommendation']
+    required_part   = data['required_part']
+    actions_taken   = data['actions_taken']
 
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
     table = dynamodb.Table(TABLE_NAME)
 
-    latest_ts = _find_latest_timestamp(table, facility_id)
+    # timestamp가 명시적으로 넘어오면 그 레코드를 직접 지정, 아니면 최신 레코드 탐색
+    latest_ts = data['timestamp'] or _find_latest_timestamp(table, facility_id)
 
     if latest_ts:
-        # 기존(원본) 레코드에 분석 결과만 덮어쓰기
         table.update_item(
             Key={'facility_id': facility_id, 'timestamp': latest_ts},
             UpdateExpression=(
                 'SET #st = :status, risk_level = :risk, '
-                'failure_type = :ft, recommendation = :rec, required_part = :part'
+                'failure_type = :ft, recommendation = :rec, '
+                'required_part = :part, actions_taken = :act'
             ),
             ExpressionAttributeNames={'#st': 'status'},
             ExpressionAttributeValues={
@@ -183,18 +206,17 @@ def save_detection(data: dict) -> dict:
                 ':risk':   Decimal(str(risk_level)),
                 ':ft':     failure_type,
                 ':rec':    recommendation,
-                ':part':   required_part
+                ':part':   required_part,
+                ':act':    actions_taken
             }
         )
-        # [알림 추가] 저장(update) 성공 직후 Critical 알림 시도
-        _notify_if_critical(facility_id, status, failure_type, risk_level, recommendation)
         return {'facility_id': facility_id, 'timestamp': latest_ts,
                 'status': status, 'mode': 'updated'}
 
-    # fallback: 원본 레코드가 없으면 새로 생성 (센서값은 비어있음)
+    # fallback: 매칭 레코드가 없으면 새로 생성
     timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')
-    sensor_values    = data.get('sensor_values', {})
-    abnormal_sensors = data.get('abnormal_sensors', [])
+    sensor_values    = data['sensor_values']
+    abnormal_sensors = data['abnormal_sensors']
     if not isinstance(sensor_values, str):
         sensor_values = json.dumps(sensor_values, ensure_ascii=False)
     if not isinstance(abnormal_sensors, str):
@@ -209,17 +231,16 @@ def save_detection(data: dict) -> dict:
         'risk_level':       Decimal(str(risk_level)),
         'failure_type':     failure_type,
         'recommendation':   recommendation,
-        'required_part':    required_part
+        'required_part':    required_part,
+        'actions_taken':    actions_taken
     })
-    # [알림 추가] 저장(create) 성공 직후 Critical 알림 시도
-    _notify_if_critical(facility_id, status, failure_type, risk_level, recommendation)
     return {'facility_id': facility_id, 'timestamp': timestamp,
             'status': status, 'mode': 'created'}
 
 
 def lambda_handler(event, context):
     """
-    1) Bedrock Action Group 호출 → Bedrock 형식 응답
+    1) Bedrock Action Group 호출 → Bedrock 형식 응답 (save_status 포함)
     2) 일반 JSON 호출 (콘솔 Test) → 일반 형식 응답
     """
     if _is_bedrock_event(event):
@@ -234,8 +255,10 @@ def lambda_handler(event, context):
 
     try:
         result = save_detection(event)
-        return {'statusCode': 200, 'message': '저장 완료', **result}
+        return {'statusCode': 200, 'save_status': 'success',
+                'message': '저장 완료', **result}
     except ValueError as e:
-        return {'statusCode': 400, 'error': str(e)}
+        return {'statusCode': 400, 'save_status': 'failed', 'error': str(e)}
     except Exception as e:
-        return {'statusCode': 500, 'error': str(e), 'message': 'DynamoDB 저장 실패'}
+        return {'statusCode': 500, 'save_status': 'failed', 'error': str(e),
+                'message': 'DynamoDB 저장 실패'}

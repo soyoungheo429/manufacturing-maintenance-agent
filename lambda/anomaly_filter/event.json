@@ -1,9 +1,0 @@
-{
-  "sensor_data": [
-    {"facility_id": "M23786", "product_type": "M", "air_temp": 297.3, "process_temp": 308.3, "rotation_speed": 1459, "torque": 59.6, "tool_wear": 207},
-    {"facility_id": "H37795", "product_type": "H", "air_temp": 298.8, "process_temp": 310.0, "rotation_speed": 1530, "torque": 38.3, "tool_wear": 53},
-    {"facility_id": "L53142", "product_type": "L", "air_temp": 300.5, "process_temp": 310.8, "rotation_speed": 1728, "torque": 26.3, "tool_wear": 125},
-    {"facility_id": "L51892", "product_type": "L", "air_temp": 303.4, "process_temp": 311.8, "rotation_speed": 1564, "torque": 35.9, "tool_wear": 171},
-    {"facility_id": "L55578", "product_type": "L", "air_temp": 298.5, "process_temp": 309.7, "rotation_speed": 2617, "torque": 12.1, "tool_wear": 102}
-  ]
-}
