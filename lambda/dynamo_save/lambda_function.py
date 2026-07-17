@@ -15,6 +15,7 @@
 
 import boto3
 import json
+import os
 from datetime import datetime
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key
@@ -31,6 +32,49 @@ def determine_status(risk_level) -> str:
         return 'WARNING'
     else:
         return 'NORMAL'
+
+
+# ══════════════════════════════════════════════════════════════════════
+# [알림 추가] Critical(DANGER) 확정 시 SNS 발행 — 발표용 알림 기능
+# 아래 _sns / _get_sns / _notify_if_critical 3개는 알림을 위해 추가된 코드다.
+# 기존 저장 로직과 독립적이며, 실패해도 저장에는 전혀 영향을 주지 않는다.
+# ══════════════════════════════════════════════════════════════════════
+_sns = None
+
+
+def _get_sns():
+    """SNS 클라이언트를 지연 생성해 캐시 (알림 기능용 추가 코드)."""
+    global _sns
+    if _sns is None:
+        _sns = boto3.client('sns', region_name=REGION)
+    return _sns
+
+
+def _notify_if_critical(facility_id, status, failure_type, risk_level, recommendation):
+    """[알림 추가] status가 DANGER/CRITICAL이면 긴급 알림 1건 발행.
+
+    SNS_CRITICAL_ALERT_TOPIC 환경변수가 없으면 조용히 건너뛰고,
+    발행 실패해도 예외를 삼켜 저장 로직 흐름을 막지 않는다.
+    """
+    if str(status).upper() not in ('DANGER', 'CRITICAL'):
+        return
+    topic_arn = os.environ.get('SNS_CRITICAL_ALERT_TOPIC')
+    if not topic_arn:
+        print('[dynamo_save] SNS_CRITICAL_ALERT_TOPIC 미설정 — 알림 스킵')
+        return
+    try:
+        _get_sns().publish(
+            TopicArn=topic_arn,
+            Subject=f'[긴급] {facility_id} 고장 확정'[:100],
+            Message=(
+                f'설비 {facility_id}에서 고장이 확진되었습니다.\n'
+                f'고장 유형: {failure_type}\n'
+                f'위험도: {risk_level}\n'
+                f'권고: {recommendation}'
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — 알림 실패가 저장을 막지 않도록
+        print(f'[dynamo_save] SNS 발행 실패(무시): {e}')
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -142,6 +186,8 @@ def save_detection(data: dict) -> dict:
                 ':part':   required_part
             }
         )
+        # [알림 추가] 저장(update) 성공 직후 Critical 알림 시도
+        _notify_if_critical(facility_id, status, failure_type, risk_level, recommendation)
         return {'facility_id': facility_id, 'timestamp': latest_ts,
                 'status': status, 'mode': 'updated'}
 
@@ -165,6 +211,8 @@ def save_detection(data: dict) -> dict:
         'recommendation':   recommendation,
         'required_part':    required_part
     })
+    # [알림 추가] 저장(create) 성공 직후 Critical 알림 시도
+    _notify_if_critical(facility_id, status, failure_type, risk_level, recommendation)
     return {'facility_id': facility_id, 'timestamp': timestamp,
             'status': status, 'mode': 'created'}
 

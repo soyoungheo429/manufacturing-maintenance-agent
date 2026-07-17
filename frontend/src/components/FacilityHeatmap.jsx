@@ -29,9 +29,6 @@ function EquipmentCard({ eq, selected, onClick }) {
             }`}
           />
           <span className="font-mono text-sm font-semibold text-foreground">{eq.id}</span>
-          <span className="text-xs font-mono text-muted-foreground bg-white/5 px-1.5 py-0.5 rounded">
-            Type {eq.productType}
-          </span>
         </div>
         <ChevronRight
           size={14}

@@ -27,3 +27,13 @@ def get_table(env_name, default_name):
     """
     table_name = os.environ.get(env_name, default_name)
     return _get_dynamodb().Table(table_name)
+
+_sns = None
+
+def get_sns():
+    global _sns
+    if _sns is None:
+        import boto3
+        region = os.environ.get("AWS_REGION", "us-east-1")
+        _sns = boto3.client("sns", region_name=region)
+    return _sns

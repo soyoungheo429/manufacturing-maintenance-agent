@@ -34,6 +34,56 @@ def _new_order_id():
     return f"PO-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
 
 
+def notify_order_saved(body, use_mock):
+    """통합 발주서 저장 알림 — DynamoDB에 쓰지 않고 SNS 메시지 1건만 발행."""
+    order_id = body.get("order_id", "") or ""
+    if not isinstance(order_id, str):
+        order_id = str(order_id)
+    decided_by = body.get("decided_by", "unknown") or "unknown"
+    items = body.get("items")
+    if not isinstance(items, list):
+        items = []
+
+    # 품목 라인 방어적으로 구성
+    item_lines = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        facility_id = it.get("facility_id", "-") or "-"
+        label = it.get("part_name") or it.get("part_id") or "-"
+        quantity = it.get("quantity", 1)
+        if quantity is None:
+            quantity = 1
+        item_lines.append(f"- {facility_id} / {label} x {quantity}")
+
+    subject = f"[통합발주서 저장] {order_id}"
+    if len(subject) > 100:
+        subject = subject[:100]
+
+    message = (
+        "통합 발주서가 저장되었습니다.\n"
+        f"발주번호: {order_id}\n"
+        f"승인자: {decided_by}\n"
+        f"시각: {_now_iso()}\n"
+        f"포함 설비: {len(item_lines)}대\n"
+        "\n"
+        "[품목]\n"
+        + ("\n".join(item_lines) if item_lines else "-")
+    )
+
+    if not use_mock:
+        from common.aws import get_sns
+
+        topic_arn = os.environ.get("SNS_ORDER_COMPLETED_TOPIC")
+        if isinstance(topic_arn, str) and topic_arn:
+            try:
+                get_sns().publish(TopicArn=topic_arn, Subject=subject, Message=message)
+            except Exception as e:  # noqa: BLE001 — 알림 실패가 응답을 깨지 않도록 무시
+                print(f"[notify_order_saved] SNS publish 실패 — 무시: {e}")
+
+    return api_response(200, {"notified": True, "order_id": order_id, "item_count": len(items or [])})
+
+
 def create_order(body, use_mock):
     facility_id = body.get("facility_id")
     part = body.get("required_part")
@@ -81,6 +131,31 @@ def update_decision(body, use_mock):
         "decided_at": _now_iso(),
     }
 
+    # 부품/고장 정보(있을 때만 저장) — 프론트 신규 페이로드(part_id/part_name/qty/failure_type)와
+    # 과거 단일 필드 호출(required_part/quantity) 두 형태를 모두 수용
+    failure_type = body.get("failure_type")
+    if isinstance(failure_type, str) and failure_type:
+        record["failure_type"] = failure_type
+
+    part_id = body.get("part_id")
+    if isinstance(part_id, str) and part_id:
+        record["part_id"] = part_id
+
+    part_name = body.get("part_name")
+    if not (isinstance(part_name, str) and part_name):
+        part_name = body.get("required_part")
+    if isinstance(part_name, str) and part_name:
+        record["part_name"] = part_name
+
+    qty_raw = body.get("quantity")
+    if qty_raw is None:
+        qty_raw = body.get("qty")
+    if qty_raw is not None:
+        try:
+            record["quantity"] = int(qty_raw)
+        except (ValueError, TypeError):
+            pass
+
     if not use_mock:
         from common.aws import get_table
 
@@ -94,6 +169,10 @@ def update_decision(body, use_mock):
 def handler(event, context):
     body = parse_event_body(event)
     use_mock = body.get("use_mock", False)
+
+    # 통합 발주서 저장 알림 — DynamoDB 미기록, SNS 1건만 발행
+    if body.get("notify") == "order_saved":
+        return notify_order_saved(body, use_mock)
 
     # decision 필드가 있으면 상태 변경, 없으면 신규 발주 생성
     if body.get("decision") is not None:

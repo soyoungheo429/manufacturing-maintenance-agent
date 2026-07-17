@@ -327,13 +327,15 @@ def _earliest_creation_timestamp(rows):
 
 
 def _build_supplement_lines(detection_equipments, po_lines):
-    """Build supplement lines from detection equipments for faulty facilities.
+    """Build supplement lines from detection equipments for confirmed-fault facilities only.
 
-    For each mapped equipment dict whose status is not "normal", whose
-    maintenanceRec.parts contains a non-blank part string, and whose id is not
-    already represented among ``po_lines`` (the existing purchase-orders lines),
-    append a line ``{"equipmentId": <id>, "part": <first non-blank part>,
-    "qty": 1}``. Supplement lines never carry ``partId`` or ``referenceOnly``.
+    Supplementation targets confirmed-fault (critical) facilities exclusively:
+    warning and normal statuses are skipped. For each mapped equipment dict whose
+    status is "critical", whose maintenanceRec.parts contains a non-blank part
+    string, and whose id is not already represented among ``po_lines`` (the
+    existing purchase-orders lines), append a line ``{"equipmentId": <id>,
+    "part": <first non-blank part>, "qty": 1}``. Supplement lines never carry
+    ``referenceOnly``.
 
     Facilities with a blank/missing id or no usable part are skipped, and a
     facility is supplemented at most once.
@@ -352,7 +354,7 @@ def _build_supplement_lines(detection_equipments, po_lines):
     for equipment in detection_equipments:
         if not isinstance(equipment, dict):
             continue
-        if equipment.get("status") == "normal":
+        if equipment.get("status") != "critical":
             continue
         facility_id = equipment.get("id")
         if not isinstance(facility_id, str) or not facility_id.strip():

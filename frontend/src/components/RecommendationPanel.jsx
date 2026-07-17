@@ -87,9 +87,6 @@ export default function RecommendationPanel({ eq, order, canApprove, onOrderActi
           <div>
             <div className="flex items-center gap-3 mb-1">
               <h2 className="font-mono text-2xl font-bold text-foreground">{eq.id}</h2>
-              <span className="text-sm font-mono text-muted-foreground bg-white/5 border border-border px-2 py-0.5 rounded">
-                Type {eq.productType}
-              </span>
             </div>
             <div className="flex items-center gap-2 mt-2">
               <StatusBadge status={eq.status} />

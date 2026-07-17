@@ -159,9 +159,13 @@ export function seededNoise(seed, i) {
 
 export function buildHistory(eq, key) {
   const r = SENSOR_RANGES[key];
-  const current = eq.sensors[key];
+  const rawCurrent = eq.sensors ? eq.sensors[key] : undefined;
   const mid = (r.min + r.max) / 2;
   const span = r.max - r.min;
+  // sensor_values가 비어 있거나 잘못된 경우 midpoint로 대체 — 차트가 평평한 선으로 렌더되도록 보장
+  const hasValidCurrent =
+    typeof rawCurrent === "number" && Number.isFinite(rawCurrent);
+  const current = hasValidCurrent ? rawCurrent : mid;
   const points = [];
   for (let i = 0; i < 7; i++) {
     const t = i / 6;
@@ -171,7 +175,12 @@ export function buildHistory(eq, key) {
     const v = i === 6 ? current : base + noise;
     points.push({
       time: i === 6 ? "현재" : `-${(6 - i) * 10}분`,
-      value: Number(v.toFixed(1)),
+      value: Number(
+        (i === 6
+          ? (typeof current === "number" && Number.isFinite(current) ? current : mid)
+          : v
+        ).toFixed(1)
+      ),
     });
   }
   return points;

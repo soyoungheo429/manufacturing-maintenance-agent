@@ -139,6 +139,39 @@ export default function App() {
     (id) => (order.decisions[id] ?? "pending") === "pending"
   ).length;
 
+  // 결정 페이로드에 포함할 부품/고장 정보 조회 — 각 시설당 현재 1개 라인 가정
+  // part_id/part_name은 동일 값으로 통일해 백엔드 저장을 단순화하고,
+  // failure_type은 해당 설비의 첫 번째 fault 코드에서 가져온다.
+  // 값이 없거나 유효하지 않은 필드는 생략해 백엔드가 하위 호환 처리 가능하도록 함.
+  const resolveFacilityPart = (currentOrder, equipmentsList, facilityId) => {
+    const info = {};
+
+    const eq = equipmentsList?.find((e) => e.id === facilityId);
+    const failure = eq?.faultAnalysis?.faults?.[0];
+    if (typeof failure === "string" && failure.length > 0) {
+      info.failure_type = failure;
+    }
+
+    const line = currentOrder?.lines?.find((l) => l.equipmentId === facilityId);
+    if (line) {
+      const partValue =
+        typeof line.partId === "string" && line.partId
+          ? line.partId
+          : typeof line.part === "string" && line.part
+            ? line.part
+            : "";
+      if (partValue.length > 0) {
+        info.part_id = partValue;
+        info.part_name = partValue;
+      }
+      if (typeof line.qty === "number") {
+        info.quantity = line.qty;
+      }
+    }
+
+    return info;
+  };
+
   // 발주 승인/거절: 화면 먼저 갱신(낙관적 업데이트) 후 POST /order로 서버에 반영
   const handleOrderAction = async (equipmentId, action) => {
     setOrder((prev) => ({
@@ -146,12 +179,22 @@ export default function App() {
       decisions: { ...prev.decisions, [equipmentId]: action },
     }));
     try {
+      // order.id가 비어있는 경우 DynamoDB 파티션 키 거부를 피하기 위해 대체 ID 생성
+      const effectiveOrderId =
+        order.id && order.id.trim()
+          ? order.id
+          : `PO-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random()
+              .toString(36)
+              .slice(2, 6)
+              .toUpperCase()}`;
       // create_order Lambda 스키마 확정 시 payload 필드명만 맞추면 됨
+      const partInfo = resolveFacilityPart(order, equipments, equipmentId);
       await createOrder({
-        order_id: order.id,
+        order_id: effectiveOrderId,
         facility_id: equipmentId,
         decision: action,
         decided_by: user?.username ?? "unknown",
+        ...partInfo,
       });
     } catch (err) {
       console.warn("POST /order 반영 실패 — 화면 상태는 유지:", err);
@@ -170,17 +213,45 @@ export default function App() {
     const orderedFacilityIds = [...new Set(savedFacilityIds ?? [])].filter(
       (id) => order.decisions[id] === "approved"
     );
+    // 승인 세션 하나가 동일 order_id로 묶이도록 fallback을 루프 밖에서 1회 계산
+    const effectiveOrderId =
+      order.id && order.id.trim()
+        ? order.id
+        : `PO-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Math.random()
+            .toString(36)
+            .slice(2, 6)
+            .toUpperCase()}`;
     for (const id of orderedFacilityIds) {
       try {
         // create_order Lambda update_decision 경로("ordered" 허용)로 발주완료 상태 영속화
+        const partInfo = resolveFacilityPart(order, equipments, id);
         await createOrder({
-          order_id: order.id,
+          order_id: effectiveOrderId,
           facility_id: id,
           decision: "ordered",
           decided_by: user?.username ?? "unknown",
+          ...partInfo,
         });
       } catch (err) {
         console.warn("POST /order 반영 실패 — 화면 상태는 유지:", err);
+      }
+    }
+
+    // 통합 발주서 저장 알림 — 저장된 발주 요약을 SNS로 1회만 전송(설비별 루프 밖)
+    if (orderedFacilityIds.length > 0) {
+      const items = orderedFacilityIds.map((id) => ({
+        facility_id: id,
+        ...resolveFacilityPart(order, equipments, id),
+      }));
+      try {
+        await createOrder({
+          notify: "order_saved",
+          order_id: effectiveOrderId,
+          decided_by: user?.username ?? "unknown",
+          items,
+        });
+      } catch (err) {
+        console.warn("발주 저장 알림 실패 — 무시:", err);
       }
     }
   };
