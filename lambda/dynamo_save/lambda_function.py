@@ -255,12 +255,20 @@ def save_detection(raw_data: dict) -> dict:
     latest_ts = data['timestamp'] or _find_latest_timestamp(table, facility_id)
 
     if latest_ts:
+        # timestamp는 정렬키(Sort Key)라서 update_item으로 값을 바꿀 수 없다.
+        # 그래서 레코드 내용(센서값/판단결과)은 매번 갱신되는데도 timestamp는
+        # 최초 생성 시각에 영원히 고정되어, 대시보드의 "마지막 업데이트 시각"이
+        # 실제 갱신 시점을 반영하지 못하는 문제가 있었다. updated_at에 실제
+        # 갱신 시각을 별도로 기록한다.
+        updated_at = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')
+
         # sensor_values가 '{}'(빈 값)이면 기존에 저장된 값을 덮어쓰지 않는다.
         # (Agent가 sensor_values를 안 보낸 호출이 기존 실측 데이터를 지우는 것을 방지)
         update_expr = (
             'SET #st = :status, risk_level = :risk, '
             'failure_type = :ft, recommendation = :rec, '
-            'required_part = :part, actions_taken = :act'
+            'required_part = :part, actions_taken = :act, '
+            'updated_at = :updated_at'
         )
         expr_values = {
             ':status': status,
@@ -268,7 +276,8 @@ def save_detection(raw_data: dict) -> dict:
             ':ft':     failure_type,
             ':rec':    recommendation,
             ':part':   required_part,
-            ':act':    actions_taken
+            ':act':    actions_taken,
+            ':updated_at': updated_at
         }
         if sensor_values and sensor_values != '{}':
             update_expr += ', sensor_values = :sv, abnormal_sensors = :abn'
@@ -292,6 +301,7 @@ def save_detection(raw_data: dict) -> dict:
     table.put_item(Item={
         'facility_id':      facility_id,
         'timestamp':        timestamp,
+        'updated_at':       timestamp,
         'status':           status,
         'sensor_values':    sensor_values,
         'abnormal_sensors': abnormal_sensors,

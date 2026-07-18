@@ -29,6 +29,22 @@ import uuid
 # 시뮬레이션 설비 수
 NUM_FACILITIES = 5
 # 시연 시 이상 감지가 반드시 보이도록 고장 데이터에서 보장할 최소 설비 수
+#
+# 참고: 이 값을 0으로 바꾸면(=제한 없이 순수 랜덤 샘플링) 어떻게 되는지.
+#   - read_sensor_data()의 n_fail = min(0, len(failure_pool)) = 0 이 되고,
+#     n_normal = NUM_FACILITIES - 0 = 5 가 되어 5대 전부 normal_pool에서만 뽑힘.
+#     즉 "고장 2대 보장"이 사라지고 매번 순수 랜덤 5개 샘플링이 된다.
+#   - AI4I 데이터셋은 고장 비율이 약 3.4%로 매우 낮아서, 순수 랜덤이면
+#     새로고침을 여러 번 눌러도 5대 모두 정상만 나오는 경우가 흔해진다.
+#   - 그러면 Agent의 이상판단, calculator, range_check, KB 검색,
+#     inventory_check/create_order로 이어지는 흐름을 시연/테스트 중에
+#     못 보여줄 위험이 커진다 (특히 발표 당일 우연히 전부 정상만 나오면
+#     보여줄 게 없어짐).
+#   - 반대로 "실제 공장처럼 고장이 드물게 발생하는 현실적인 분포"를
+#     그대로 보여주고 싶다면 0으로 바꾸는 것이 더 사실적이다.
+#   - 코드 수정은 이 상수 값만 바꾸면 되고, read_sensor_data()의
+#     분기 로직(sample n=0일 때 failure_pool.sample 호출)도 pandas가
+#     빈 샘플을 반환하도록 정상 처리하므로 별도 예외처리는 필요 없다.
 NUM_GUARANTEED_FAILURES = 2
 
 # 고정 설비 ID (매 실행마다 동일한 5대를 추적할 수 있도록 고정)
