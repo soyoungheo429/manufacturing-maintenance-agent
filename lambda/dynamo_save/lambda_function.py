@@ -116,7 +116,18 @@ def _normalize_input(data: dict) -> dict:
     recommended_action)과 구 스펙(facility_id/risk_level/status/
     failure_type/recommendation/required_part)을 모두 받아
     하나의 내부 표현으로 정규화한다. 새 스펙 필드가 있으면 우선한다.
+
+    Action Group 파라미터 5개 제한(Bedrock 하드 리밋) 때문에, 분석 결과
+    4개 필드(risk_level/failure_type/recommendation/required_part)를
+    'analysis'라는 JSON 문자열 파라미터 하나로 묶어서 받을 수도 있다.
+    _coerce()가 이미 JSON 문자열을 dict로 변환해두므로, 여기서는 그
+    dict를 최상위 data에 병합해서 이후 로직을 그대로 재사용한다.
+    analysis와 최상위 필드가 동시에 있으면 최상위 필드가 우선한다.
     """
+    analysis = data.get('analysis')
+    if isinstance(analysis, dict):
+        data = {**analysis, **data}
+
     facility_id = data.get('equipment_id') or data.get('facility_id')
 
     # sensor_data(신규) 우선, 없으면 sensor_values(구) 사용
@@ -186,6 +197,14 @@ def save_detection(raw_data: dict) -> dict:
     required_part   = data['required_part']
     actions_taken   = data['actions_taken']
 
+    # sensor_values/abnormal_sensors는 DynamoDB에 문자열(JSON)로 저장한다.
+    sensor_values    = data['sensor_values']
+    abnormal_sensors = data['abnormal_sensors']
+    if not isinstance(sensor_values, str):
+        sensor_values = json.dumps(sensor_values, ensure_ascii=False)
+    if not isinstance(abnormal_sensors, str):
+        abnormal_sensors = json.dumps(abnormal_sensors, ensure_ascii=False)
+
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
     table = dynamodb.Table(TABLE_NAME)
 
@@ -193,34 +212,37 @@ def save_detection(raw_data: dict) -> dict:
     latest_ts = data['timestamp'] or _find_latest_timestamp(table, facility_id)
 
     if latest_ts:
+        # sensor_values가 '{}'(빈 값)이면 기존에 저장된 값을 덮어쓰지 않는다.
+        # (Agent가 sensor_values를 안 보낸 호출이 기존 실측 데이터를 지우는 것을 방지)
+        update_expr = (
+            'SET #st = :status, risk_level = :risk, '
+            'failure_type = :ft, recommendation = :rec, '
+            'required_part = :part, actions_taken = :act'
+        )
+        expr_values = {
+            ':status': status,
+            ':risk':   Decimal(str(risk_level)),
+            ':ft':     failure_type,
+            ':rec':    recommendation,
+            ':part':   required_part,
+            ':act':    actions_taken
+        }
+        if sensor_values and sensor_values != '{}':
+            update_expr += ', sensor_values = :sv, abnormal_sensors = :abn'
+            expr_values[':sv']  = sensor_values
+            expr_values[':abn'] = abnormal_sensors
+
         table.update_item(
             Key={'facility_id': facility_id, 'timestamp': latest_ts},
-            UpdateExpression=(
-                'SET #st = :status, risk_level = :risk, '
-                'failure_type = :ft, recommendation = :rec, '
-                'required_part = :part, actions_taken = :act'
-            ),
+            UpdateExpression=update_expr,
             ExpressionAttributeNames={'#st': 'status'},
-            ExpressionAttributeValues={
-                ':status': status,
-                ':risk':   Decimal(str(risk_level)),
-                ':ft':     failure_type,
-                ':rec':    recommendation,
-                ':part':   required_part,
-                ':act':    actions_taken
-            }
+            ExpressionAttributeValues=expr_values
         )
         return {'facility_id': facility_id, 'timestamp': latest_ts,
                 'status': status, 'mode': 'updated'}
 
-    # fallback: 매칭 레코드가 없으면 새로 생성
+    # fallback: 매칭 레코드가 없으면 새로 생성 (sensor_values/abnormal_sensors는 위에서 이미 문자열로 변환됨)
     timestamp = datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S')
-    sensor_values    = data['sensor_values']
-    abnormal_sensors = data['abnormal_sensors']
-    if not isinstance(sensor_values, str):
-        sensor_values = json.dumps(sensor_values, ensure_ascii=False)
-    if not isinstance(abnormal_sensors, str):
-        abnormal_sensors = json.dumps(abnormal_sensors, ensure_ascii=False)
 
     table.put_item(Item={
         'facility_id':      facility_id,

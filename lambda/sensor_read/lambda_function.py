@@ -23,6 +23,8 @@ import pandas as pd
 import io
 import json
 import os
+import time
+import uuid
 
 # 시뮬레이션 설비 수
 NUM_FACILITIES = 5
@@ -95,11 +97,38 @@ def invoke_agent_for_facility(facility_data: dict) -> None:
     설비 1대의 raw 센서 데이터를 Bedrock Agent에 그대로 전달한다.
     전처리/판단 없이 데이터만 넘기고, 이상 여부 판단(range_check),
     원인 분석(rag_search/calculator), 저장(db_save)은 전부 Agent가 수행한다.
+
+    Agent Instruction의 입력 형식 정의(facility_id, product_type,
+    sensor_values{...})와 맞추기 위해, 센서 측정값 5개는 sensor_values로
+    묶어서 전달한다. source_product_id는 데이터 추적용이라 판단에는
+    불필요하므로 감싸지 않고 최상위에 남겨둔다.
+
+    세션 ID는 매 호출마다 새로 생성한다 (설비 고정 세션 재사용 안 함).
+    설비별로 세션을 고정했을 때, Bedrock Agent가 세션에 쌓인 과거
+    대화 히스토리(옛 Instruction 기준의 예전 tool call 패턴)를 최신
+    Instruction 지침보다 우선 참고하는 문제가 있었다 (예: dynamo_save를
+    옛 5-파라미터 방식으로 호출, required_part에 "NORMAL" 삽입,
+    recommendation을 영어로 반환). 설비별 과거 이력은 세션이 아니라
+    Knowledge Base(facility-kb-v3, backup/failure_history.txt 기반)가
+    담당하므로, 세션을 매번 새로 만들어도 "설비별 기억" 기능은 유지된다.
     """
     client = boto3.client('bedrock-agent-runtime', region_name=REGION)
 
-    session_id = f"{SESSION_PREFIX}-{facility_data['facility_id']}"
-    input_text = json.dumps(facility_data, ensure_ascii=False)
+    session_id = f"{SESSION_PREFIX}-{facility_data['facility_id']}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+
+    payload = {
+        'facility_id':       facility_data['facility_id'],
+        'source_product_id': facility_data['source_product_id'],
+        'product_type':      facility_data['product_type'],
+        'sensor_values': {
+            'air_temp':       facility_data['air_temp'],
+            'process_temp':   facility_data['process_temp'],
+            'rotation_speed': facility_data['rotation_speed'],
+            'torque':         facility_data['torque'],
+            'tool_wear':      facility_data['tool_wear']
+        }
+    }
+    input_text = json.dumps(payload, ensure_ascii=False)
 
     response = client.invoke_agent(
         agentId=AGENT_ID,
