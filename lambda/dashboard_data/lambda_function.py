@@ -366,24 +366,23 @@ def _build_supplement_lines(detection_equipments, po_lines):
         parts = rec.get("parts") if isinstance(rec, dict) else None
         if not isinstance(parts, list):
             continue
-        part = None
-        for candidate in parts:
-            if isinstance(candidate, str) and candidate.strip():
-                part = candidate.strip()
-                break
-        if part is None:
+        valid_parts = [p.strip() for p in parts if isinstance(p, str) and p.strip()]
+        if not valid_parts:
             continue
         seen.add(fid)
-        line = {"equipmentId": fid, "part": part, "qty": 1}
-        # 이 설비의 failure_type(예: "OSF")을 부품 코드로 매핑해 partId를 붙인다.
-        # 이래야 보충된 감지 라인도 parts-inventory와 매칭된다. part(품명)는 그대로 유지.
+        # 복합 고장(faults 2개 이상) 설비는 부품마다 발주 라인을 따로 만든다.
+        # partId(재고 매칭용 부품 코드)는 같은 인덱스의 failure_type으로 매핑하고,
+        # 개수가 어긋나면 첫 번째 고장 유형으로 폴백한다.
         fault_analysis = equipment.get("faultAnalysis")
         faults = fault_analysis.get("faults") if isinstance(fault_analysis, dict) else None
-        failure_type = faults[0] if isinstance(faults, list) and faults else None
-        part_code = PART_CODE_BY_FAILURE.get(failure_type) if isinstance(failure_type, str) else None
-        if part_code:
-            line["partId"] = part_code
-        supplement.append(line)
+        faults = [f for f in faults if isinstance(f, str)] if isinstance(faults, list) else []
+        for idx, part in enumerate(valid_parts):
+            line = {"equipmentId": fid, "part": part, "qty": 1}
+            fault = faults[idx] if idx < len(faults) else (faults[0] if faults else None)
+            part_code = PART_CODE_BY_FAILURE.get(fault)
+            if part_code:
+                line["partId"] = part_code
+            supplement.append(line)
     return supplement
 
 
@@ -513,6 +512,18 @@ def _abnormal_sensors_to_metrics(abnormal_sensors):
     return metrics
 
 
+def _split_csv(value):
+    """콤마로 이어진 문자열을 공백 제거된 토큰 리스트로 분리한다.
+
+    복합 고장 시 failure_type("PWF,OSF")과 required_part("PW-303,OS-404")가
+    콤마 결합으로 저장되는데, 이를 개별 값 리스트로 돌려준다.
+    빈 문자열/None이면 빈 리스트.
+    """
+    if not isinstance(value, str):
+        return []
+    return [token.strip() for token in value.split(",") if token.strip()]
+
+
 def _resolve_detection_part(item):
     """detection-results 행에서 재고 매칭용 부품 식별자를 뽑는다.
 
@@ -528,6 +539,9 @@ def _resolve_detection_part(item):
             return value.strip()
     return ""
 
+def _similar_cases_to_list(similar_cases):
+    items = _safe_json_loads(similar_cases, list, "similar_cases")
+    return [it for it in items if isinstance(it, str) and it.strip()]
 
 def map_detection_to_equipment(item):
     """detection-results 실제 스키마(facility_id, status='DANGER' 등) →
@@ -547,16 +561,23 @@ def map_detection_to_equipment(item):
         )
         status = "warning"
 
+    # failure_type/required_part는 복합 고장 시 콤마로 붙어 올 수 있음
+    # (예: "PWF,OSF" / "PW-303,OS-404") — 프론트 배지·발주 라인이 유형별로
+    # 처리되도록 개별 토큰으로 분리한다. "NORMAL"은 고장이 아니므로 제외
+    # (정상 설비의 failure_type이 "NORMAL"로 저장되는데, 이게 faults에 남으면
+    # 프론트가 고장 배지로 렌더링해버림).
     failure_type = item.get("failure_type", "")
-    faults = [failure_type] if failure_type else []
+    faults = [f for f in _split_csv(failure_type) if f.upper() != "NORMAL"]
 
     required_part = _resolve_detection_part(item)
-    parts = [required_part] if required_part else []
+    parts = _split_csv(required_part)
 
     return {
         "id": item.get("facility_id", "UNKNOWN"),
         "status": status,
-        "lastUpdated": item.get("timestamp", ""),
+        # timestamp는 DynamoDB 정렬키라 update_item으로는 갱신되지 않음 —
+        # 분석 결과가 실제로 갱신된 시각은 updated_at(신규 필드)을 우선 사용
+        "lastUpdated": item.get("updated_at") or item.get("timestamp", ""),
         "sensors": _sensor_values_to_sensors(item.get("sensor_values")),
         "faultAnalysis": {
             "faults": faults,
@@ -565,7 +586,7 @@ def map_detection_to_equipment(item):
             "derivedMetrics": _abnormal_sensors_to_metrics(item.get("abnormal_sensors")),
         },
         "maintenanceRec": {
-            "similarCases": [],
+            "similarCases": _similar_cases_to_list(item.get("similar_cases")),
             "recommendation": item.get("recommendation", ""),
             "parts": parts,
         },

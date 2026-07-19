@@ -198,17 +198,26 @@ export default function RecommendationPanel({ eq, order, canApprove, onOrderActi
             <div>
               <span className="text-xs text-muted-foreground mb-2 block">유사 과거 사례</span>
               <div className="space-y-2">
-                {eq.maintenanceRec.similarCases.map((c) => (
-                  <div key={c.id} className="bg-white/[0.03] border border-white/5 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-[10px] font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded">
-                        {c.id}
-                      </span>
-                      <span className="text-[10px] font-mono text-muted-foreground">{c.date}</span>
+                {eq.maintenanceRec.similarCases.map((c, i) => {
+                  if (typeof c === "string") {
+                    return (
+                      <div key={`case-${i}`} className="bg-white/[0.03] border border-white/5 rounded-lg p-3">
+                        <p className="text-xs text-slate-400 leading-relaxed">{c}</p>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={c.id ?? `case-${i}`} className="bg-white/[0.03] border border-white/5 rounded-lg p-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-[10px] font-mono text-primary bg-primary/10 px-1.5 py-0.5 rounded">
+                          {c.id}
+                        </span>
+                        <span className="text-[10px] font-mono text-muted-foreground">{c.date}</span>
+                      </div>
+                      <p className="text-xs text-slate-400 leading-relaxed">{c.description}</p>
                     </div>
-                    <p className="text-xs text-slate-400 leading-relaxed">{c.description}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ) : (

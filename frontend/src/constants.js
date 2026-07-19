@@ -69,12 +69,13 @@ export const STATUS_CONFIG = {
   },
 };
 
+// 고장유형 배지 색상 — "확정 고장" 상태 배지와 동일한 빨강 계열로 통일
 export const FAULT_COLORS = {
-  TWF: "bg-amber-500/20 text-amber-300 border border-amber-500/30",
+  TWF: "bg-red-500/20 text-red-300 border border-red-500/30",
   HDF: "bg-red-500/20 text-red-300 border border-red-500/30",
-  PWF: "bg-orange-500/20 text-orange-300 border border-orange-500/30",
-  OSF: "bg-rose-500/20 text-rose-300 border border-rose-500/30",
-  RNF: "bg-purple-500/20 text-purple-300 border border-purple-500/30",
+  PWF: "bg-red-500/20 text-red-300 border border-red-500/30",
+  OSF: "bg-red-500/20 text-red-300 border border-red-500/30",
+  RNF: "bg-red-500/20 text-red-300 border border-red-500/30",
 };
 
 export const CONFIDENCE_CONFIG = {
