@@ -434,9 +434,17 @@ def build_order_from_purchase_orders(items, detection_equipments=None, inventory
     # ("unknown" — 프론트가 폴백 처리). inventory가 None이면 부착하지 않음(하위 호환).
     if isinstance(inventory, dict):
         for line in lines:
+            candidates = []
             part_id = line.get("partId")
-            if isinstance(part_id, str) and part_id in inventory:
-                line["stock"] = inventory[part_id]
+            if isinstance(part_id, str) and part_id.strip():
+                candidates.append(part_id.strip())
+            part_label = line.get("part")
+            if isinstance(part_label, str) and part_label.strip():
+                candidates.append(part_label.strip())
+            for key in candidates:
+                if key in inventory:
+                    line["stock"] = inventory[key]
+                    break
 
     decisions = _build_order_decisions(rows, lines)
     created_at = _earliest_creation_timestamp(rows)
