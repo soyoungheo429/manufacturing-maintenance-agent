@@ -24,39 +24,15 @@ from common.utils import parse_event_body, api_response  # noqa: E402
 
 VALID_DECISIONS = ("pending", "approved", "rejected", "ordered")
 
+
 def _now_iso():
     return datetime.now(timezone.utc).isoformat()
 
+
 def _new_order_id():
+    # 사람이 읽기 쉬운 발주번호: PO-<날짜>-<랜덤4자리>
     return f"PO-{datetime.now(timezone.utc).strftime('%Y%m%d')}-{uuid.uuid4().hex[:4].upper()}"
 
-def _is_bedrock_agent_event(event):
-    """Bedrock Agent Action Group 호출인지 판별"""
-    return "actionGroup" in event and "function" in event
-
-def _bedrock_response(event, body_text):
-    """Bedrock Agent Action Group 응답 형식으로 래핑"""
-    return {
-        "messageVersion": "1.0",
-        "response": {
-            "actionGroup": event.get("actionGroup", ""),
-            "function": event.get("function", ""),
-            "functionResponse": {
-                "responseBody": {
-                    "TEXT": {
-                        "body": body_text
-                    }
-                }
-            }
-        }
-    }
-
-def _extract_bedrock_params(event):
-    """Bedrock Agent event에서 parameters 배열을 dict로 변환"""
-    params = {}
-    for p in event.get("parameters", []):
-        params[p["name"]] = p["value"]
-    return params
 
 def notify_order_saved(body, use_mock):
     """통합 발주서 저장 알림 — DynamoDB에 쓰지 않고 SNS 메시지 1건만 발행."""
@@ -68,6 +44,7 @@ def notify_order_saved(body, use_mock):
     if not isinstance(items, list):
         items = []
 
+    # 품목 라인 방어적으로 구성
     item_lines = []
     for it in items:
         if not isinstance(it, dict):
@@ -101,10 +78,11 @@ def notify_order_saved(body, use_mock):
         if isinstance(topic_arn, str) and topic_arn:
             try:
                 get_sns().publish(TopicArn=topic_arn, Subject=subject, Message=message)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — 알림 실패가 응답을 깨지 않도록 무시
                 print(f"[notify_order_saved] SNS publish 실패 — 무시: {e}")
 
     return api_response(200, {"notified": True, "order_id": order_id, "item_count": len(items or [])})
+
 
 def create_order(body, use_mock):
     facility_id = body.get("facility_id")
@@ -137,6 +115,7 @@ def create_order(body, use_mock):
 
     return api_response(200, {"created": True, "order": order})
 
+
 def update_decision(body, use_mock):
     order_id = body.get("order_id")
     facility_id = body.get("facility_id")
@@ -152,6 +131,8 @@ def update_decision(body, use_mock):
         "decided_at": _now_iso(),
     }
 
+    # 부품/고장 정보(있을 때만 저장) — 프론트 신규 페이로드(part_id/part_name/qty/failure_type)와
+    # 과거 단일 필드 호출(required_part/quantity) 두 형태를 모두 수용
     failure_type = body.get("failure_type")
     if isinstance(failure_type, str) and failure_type:
         record["failure_type"] = failure_type
@@ -179,53 +160,24 @@ def update_decision(body, use_mock):
         from common.aws import get_table
 
         table = get_table("DYNAMODB_ORDER_TABLE", "purchase-orders")
+        # PK: order_id, SK: timestamp — 설비별 결정 이력을 append은
         table.put_item(Item={**record, "timestamp": record["decided_at"]})
 
     return api_response(200, {"updated": True, "decision": record})
 
+
 def handler(event, context):
-    # ★ Bedrock Agent Action Group 호출 분기
-    if _is_bedrock_agent_event(event):
-        params = _extract_bedrock_params(event)
-        facility_id = params.get("facility_id", "")
-        required_part = params.get("required_part", "")
-        recommendation = params.get("recommendation", "")
-        qty = 1
-        try:
-            qty = int(params.get("qty", 1))
-        except (ValueError, TypeError):
-            qty = 1
-
-        # DynamoDB 저장
-        order = {
-            "order_id": _new_order_id(),
-            "timestamp": _now_iso(),
-            "facility_id": facility_id,
-            "required_part": required_part,
-            "qty": qty,
-            "recommendation": recommendation,
-            "status": "pending",
-        }
-
-        try:
-            from common.aws import get_table
-            table = get_table("DYNAMODB_ORDER_TABLE", "purchase-orders")
-            table.put_item(Item=order)
-        except Exception as e:
-            return _bedrock_response(event, f"발주서 생성 실패: {str(e)}")
-
-        result_text = f"발주서 생성 완료 — 발주번호: {order['order_id']}, 부품: {required_part}, 설비: {facility_id}, 수량: {qty}"
-        return _bedrock_response(event, result_text)
-
-    # ★ API Gateway / 프론트엔드 호출 (기존 로직 유지)
     body = parse_event_body(event)
     use_mock = body.get("use_mock", False)
 
+    # 통합 발주서 저장 알림 — DynamoDB 미기록, SNS 1건만 발행
     if body.get("notify") == "order_saved":
         return notify_order_saved(body, use_mock)
 
+    # decision 필드가 있으면 상태 변경, 없으면 신규 발주 생성
     if body.get("decision") is not None:
         return update_decision(body, use_mock)
     return create_order(body, use_mock)
+
 
 lambda_handler = handler
