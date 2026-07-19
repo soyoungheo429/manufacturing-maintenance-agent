@@ -204,7 +204,10 @@ def _normalize_input(data: dict) -> dict:
         'failure_type':      data.get('failure_type', ''),
         'recommendation':    recommendation,
         'required_part':     data.get('required_part', ''),
-        'actions_taken':     data.get('actions_taken', '')
+        'actions_taken':     data.get('actions_taken', ''),
+        # KB(과거 고장 이력) 검색으로 찾은 유사 사례 목록. Agent가 analysis
+        # JSON 안에 담아 보낸다 (파라미터 5개 제한 때문에 analysis로 병합).
+        'similar_cases':     data.get('similar_cases', [])
     }
 
 
@@ -240,13 +243,16 @@ def save_detection(raw_data: dict) -> dict:
     required_part   = data['required_part']
     actions_taken   = data['actions_taken']
 
-    # sensor_values/abnormal_sensors는 DynamoDB에 문자열(JSON)로 저장한다.
+    # sensor_values/abnormal_sensors/similar_cases는 DynamoDB에 문자열(JSON)로 저장한다.
     sensor_values    = data['sensor_values']
     abnormal_sensors = data['abnormal_sensors']
+    similar_cases    = data['similar_cases']
     if not isinstance(sensor_values, str):
         sensor_values = json.dumps(sensor_values, ensure_ascii=False)
     if not isinstance(abnormal_sensors, str):
         abnormal_sensors = json.dumps(abnormal_sensors, ensure_ascii=False)
+    if not isinstance(similar_cases, str):
+        similar_cases = json.dumps(similar_cases, ensure_ascii=False)
 
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
     table = dynamodb.Table(TABLE_NAME)
@@ -284,6 +290,12 @@ def save_detection(raw_data: dict) -> dict:
             expr_values[':sv']  = sensor_values
             expr_values[':abn'] = abnormal_sensors
 
+        # similar_cases가 빈 배열('[]')이 아닐 때만 갱신 (KB 검색을 안 한
+        # 정상 케이스가 기존에 저장된 유사사례를 지우지 않도록 방지)
+        if similar_cases and similar_cases != '[]':
+            update_expr += ', similar_cases = :sc'
+            expr_values[':sc'] = similar_cases
+
         table.update_item(
             Key={'facility_id': facility_id, 'timestamp': latest_ts},
             UpdateExpression=update_expr,
@@ -305,6 +317,7 @@ def save_detection(raw_data: dict) -> dict:
         'status':           status,
         'sensor_values':    sensor_values,
         'abnormal_sensors': abnormal_sensors,
+        'similar_cases':    similar_cases,
         'risk_level':       Decimal(str(risk_level)),
         'failure_type':     failure_type,
         'recommendation':   recommendation,
